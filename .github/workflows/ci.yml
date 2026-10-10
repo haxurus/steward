@@ -170,12 +170,18 @@ jobs:
           go-version: "1.26"
           check-latest: true
 
+      - name: Install ffmpeg
+        # lib/dca (soundboard audio) encodes test files with ffmpeg/ffprobe.
+        if: needs.scope.outputs.full == 'true' || contains(needs.scope.outputs.packages, '/lib/dca')
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends ffmpeg
+
       - name: Test
         shell: bash
         env:
           PACKAGES: ${{ needs.scope.outputs.packages }}
-          # Full runs ignore the test cache: they exist to re-verify everything.
-          GO_TEST_FLAGS: ${{ needs.scope.outputs.full == 'true' && '-count=1' || '' }}
+          # A hung test fails its package after 5 minutes instead of 10. Full runs ignore
+          # the test cache: they exist to re-verify everything.
+          GO_TEST_FLAGS: -timeout=5m ${{ needs.scope.outputs.full == 'true' && '-count=1' || '' }}
         run: |
           # shellcheck disable=SC2086 # PACKAGES is a space-separated list
           .github/scripts/go-test.sh $PACKAGES
