@@ -1,0 +1,114 @@
+name: Sync upstream
+
+# Daily: fast-forwards `master` to botlabs-gg/yagpdb master (plus tags), then merges
+# it into `sync/upstream` on top of `main` and opens or updates a pull request, with
+# CI run on the merge. Conflicts fail the run and list the files (docs/UPSTREAM.md).
+
+on:
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: https://github.com/botlabs-gg/yagpdb.git
+  SYNC_BRANCH: sync/upstream
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Mirror upstream master and tags
+        id: mirror
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream "$UPSTREAM"
+          git fetch --quiet --no-tags upstream master
+          git fetch --quiet upstream 'refs/tags/*:refs/tags/*'
+          upstream_sha=$(git rev-parse upstream/master)
+          echo "sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+
+          if ! git merge-base --is-ancestor origin/master upstream/master; then
+            echo "::error::origin/master is not an ancestor of upstream/master: master must only mirror upstream (docs/UPSTREAM.md)"
+            exit 1
+          fi
+          if [ "$(git rev-parse origin/master)" != "$upstream_sha" ]; then
+            git push --quiet origin "upstream/master:refs/heads/master"
+            echo "master fast-forwarded to $upstream_sha" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          git push --quiet origin --tags
+
+      - name: Merge upstream into main
+        id: merge
+        shell: bash
+        env:
+          UPSTREAM_SHA: ${{ steps.mirror.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if git merge-base --is-ancestor "$UPSTREAM_SHA" origin/main; then
+            echo "main already contains upstream ${UPSTREAM_SHA:0:8}." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "pending=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --quiet -B "$SYNC_BRANCH" origin/main
+
+          version=$(git describe --tags --always "$UPSTREAM_SHA")
+          if ! git merge --no-ff --no-edit -m "Merge upstream botlabs-gg/yagpdb ${version}" "$UPSTREAM_SHA"; then
+            {
+              echo "### Upstream merge needs manual resolution"
+              echo
+              echo "Upstream: \`${version}\` (${UPSTREAM_SHA})"
+              echo
+              echo "Conflicting files:"
+              git diff --name-only --diff-filter=U | sed 's/^/- /'
+              echo
+              echo "Resolve locally as described in docs/UPSTREAM.md."
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            git merge --abort
+            echo "::error::Upstream ${version} conflicts with main: see the job summary"
+            exit 1
+          fi
+
+          git push --quiet --force origin "$SYNC_BRANCH"
+          echo "pending=true" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the pull request
+        if: steps.merge.outputs.pending == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.merge.outputs.version }}
+          UPSTREAM_SHA: ${{ steps.mirror.outputs.sha }}
+        run: |
+          set -euo pipefail
+          body=$(printf 'Automatic merge of botlabs-gg/yagpdb `%s` (%s) into `main`.\n\nCI runs on this branch, targeted at the packages upstream changed. Before merging, read `breaking_changes.md` in the diff and the checklist in `docs/UPSTREAM.md`.\n' "$VERSION" "$UPSTREAM_SHA")
+          number=$(gh pr list --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --title "Sync upstream ${VERSION}" --body "$body"
+          elif ! gh pr create --head "$SYNC_BRANCH" --base main --title "Sync upstream ${VERSION}" --body "$body"; then
+            echo "::warning::Could not open the pull request (Settings > Actions > General > Allow GitHub Actions to create pull requests). Open it from https://github.com/${GITHUB_REPOSITORY}/compare/main...${SYNC_BRANCH}"
+          fi
+
+          # Pushes made with GITHUB_TOKEN start no workflow: run CI on the branch explicitly.
+          gh workflow run ci.yml --ref "$SYNC_BRANCH" -f base=main
+          echo "CI started on \`$SYNC_BRANCH\` for upstream \`$VERSION\`." >> "$GITHUB_STEP_SUMMARY"
