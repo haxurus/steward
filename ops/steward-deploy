@@ -1,28 +1,28 @@
 #!/bin/sh
-# Deploys, rolls back and reports the YAGPDB release on VPS01 (docs/DEPLOYMENT.md).
-# Run as root; GitHub Actions reaches it only through yagpdb-deploy-entrypoint.
+# Deploys, rolls back and reports the Steward release on VPS01 (docs/DEPLOYMENT.md).
+# Run as root; GitHub Actions reaches it only through steward-deploy-entrypoint.
 #
 # Releases are immutable image digests. The Compose file and runtime files are taken
-# from /opt/yagpdb-deploy inside the image being started, so a rollback also restores
+# from /opt/steward-deploy inside the image being started, so a rollback also restores
 # the configuration of the previous release.
 set -eu
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-REPO=ghcr.io/haxurus/yagpdb
-STATE_DIR=/srv/docker/yagpdb
+REPO=ghcr.io/haxurus/steward
+STATE_DIR=/srv/docker/steward
 COMPOSE_FILE="$STATE_DIR/docker-compose.yml"
-APP_ENV="$STATE_DIR/yagpdb.env"
+APP_ENV="$STATE_DIR/steward.env"
 CURRENT_FILE="$STATE_DIR/.release"
 PREVIOUS_FILE="$STATE_DIR/.previous-release"
 BACKUP_DIR="$STATE_DIR/backups"
 LOG_DIR="$STATE_DIR/logs"
-PROJECT=yagpdb
-LOCK_FILE=/run/yagpdb-deploy.lock
-HEALTH_SERVICES='yagpdb edge'
+PROJECT=steward
+LOCK_FILE=/run/steward-deploy.lock
+HEALTH_SERVICES='steward edge'
 HEALTH_TIMEOUT=300
 
-log() { printf '[yagpdb-deploy] %s\n' "$*"; }
-die() { printf '[yagpdb-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
+log() { printf '[steward-deploy] %s\n' "$*"; }
+die() { printf '[steward-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die 'must run as root'
 [ -f "$APP_ENV" ] || die "missing $APP_ENV (run ops/install-vps.sh)"
@@ -52,7 +52,7 @@ write_release() {
 
 compose() {
   image="$1"; shift
-  YAGPDB_IMAGE="$image" docker compose --project-name "$PROJECT" --project-directory "$STATE_DIR" \
+  STEWARD_IMAGE="$image" docker compose --project-name "$PROJECT" --project-directory "$STATE_DIR" \
     -f "$COMPOSE_FILE" "$@"
 }
 
@@ -61,7 +61,7 @@ extract_bundle() {
   image="$1"; staging="$2"
   cid=$(docker create "$image") || return 1
   status=0
-  docker cp "$cid:/opt/yagpdb-deploy/." "$staging" >/dev/null || status=1
+  docker cp "$cid:/opt/steward-deploy/." "$staging" >/dev/null || status=1
   docker rm "$cid" >/dev/null 2>&1 || true
   [ "$status" -eq 0 ] && [ -f "$staging/docker-compose.yml" ] && [ -f "$staging/runtime/nginx.conf" ] && [ -f "$staging/runtime/db-init.sh" ]
 }
@@ -75,7 +75,7 @@ install_bundle() {
     log 'the image has no valid deployment bundle'
     return 1
   fi
-  if ! YAGPDB_IMAGE="$image" docker compose --project-name "$PROJECT" --project-directory "$STATE_DIR" \
+  if ! STEWARD_IMAGE="$image" docker compose --project-name "$PROJECT" --project-directory "$STATE_DIR" \
       -f "$staging/docker-compose.yml" config -q; then
     rm -rf "$staging"
     log 'the Compose configuration of the image is invalid'
@@ -85,7 +85,7 @@ install_bundle() {
   install -o root -g root -m 600 "$staging/docker-compose.yml" "$COMPOSE_FILE"
   install -o root -g root -m 644 "$staging/runtime/nginx.conf" "$STATE_DIR/runtime/nginx.conf"
   install -o root -g root -m 755 "$staging/runtime/db-init.sh" "$STATE_DIR/runtime/db-init.sh"
-  install -o root -g root -m 600 "$staging/yagpdb.env.example" "$STATE_DIR/yagpdb.env.example"
+  install -o root -g root -m 600 "$staging/steward.env.example" "$STATE_DIR/steward.env.example"
   rm -rf "$staging"
 }
 
@@ -98,7 +98,7 @@ backup_data() {
     out="$BACKUP_DIR/predeploy-$stamp.pgdump"
     log 'backing up PostgreSQL'
     if ! (umask 077; compose "$image" exec -T postgres sh -c \
-        'export PGPASSWORD="$(cat /run/secrets/postgres_admin_password)"; exec pg_dump -Fc -U postgres yagpdb' > "$out"); then
+        'export PGPASSWORD="$(cat /run/secrets/postgres_admin_password)"; exec pg_dump -Fc -U postgres steward' > "$out"); then
       rm -f "$out"
       die 'PostgreSQL backup failed; deployment aborted'
     fi
@@ -119,7 +119,7 @@ backup_data() {
   find "$BACKUP_DIR" -type f -name 'predeploy-*' -mtime +14 -delete 2>/dev/null || true
 }
 
-# Image references a rollback can still need; every other YAGPDB image is garbage.
+# Image references a rollback can still need; every other Steward image is garbage.
 keep_refs() {
   for file in "$CURRENT_FILE" "$PREVIOUS_FILE"; do
     read_release "$file" && printf '%s\n' "$IMAGE"
@@ -147,7 +147,7 @@ ensure_disk_space() {
   available=$(free_kb)
   [ -n "$available" ] || return 0
   [ "$available" -ge $((5 * 1024 * 1024)) ] && return 0
-  log "low disk space ($((available / 1024)) MiB free): pruning old YAGPDB images"
+  log "low disk space ($((available / 1024)) MiB free): pruning old Steward images"
   prune_images "$@"
   available=$(free_kb)
   [ "$available" -ge $((3 * 1024 * 1024)) ] || die 'less than 3 GiB free on /var/lib/docker; free space before deploying'
@@ -186,7 +186,7 @@ save_failure_logs() {
   # never in the SSH output that ends up in GitHub Actions logs.
   install -d -o root -g root -m 700 "$LOG_DIR"
   failure_log="$LOG_DIR/deploy-failed-$(date -u +%Y%m%dT%H%M%SZ).log"
-  (umask 077; compose "$1" logs --no-color --tail=300 yagpdb edge db-init > "$failure_log" 2>&1) || true
+  (umask 077; compose "$1" logs --no-color --tail=300 steward edge db-init > "$failure_log" 2>&1) || true
   find "$LOG_DIR" -type f -name 'deploy-failed-*.log' -mtime +30 -delete 2>/dev/null || true
   log "service logs saved on the VPS: $failure_log"
 }
@@ -264,19 +264,19 @@ status_release() {
 
 # One operation at a time: a manual run must not interleave with a GitHub deploy.
 exec 9>"$LOCK_FILE"
-flock -n 9 || die "another yagpdb-deploy operation is running (lock: $LOCK_FILE)"
+flock -n 9 || die "another steward-deploy operation is running (lock: $LOCK_FILE)"
 
 case "${1:-}" in
   deploy)
-    [ "$#" -eq 2 ] || die 'usage: yagpdb-deploy deploy IMAGE@sha256:DIGEST'
+    [ "$#" -eq 2 ] || die 'usage: steward-deploy deploy IMAGE@sha256:DIGEST'
     deploy_release "$2"
     ;;
   rollback)
-    [ "$#" -eq 1 ] || die 'usage: yagpdb-deploy rollback'
+    [ "$#" -eq 1 ] || die 'usage: steward-deploy rollback'
     rollback_release
     ;;
   status)
-    [ "$#" -eq 1 ] || die 'usage: yagpdb-deploy status'
+    [ "$#" -eq 1 ] || die 'usage: steward-deploy status'
     status_release
     ;;
   *) die 'allowed commands: deploy, rollback, status' ;;

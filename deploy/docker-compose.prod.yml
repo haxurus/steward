@@ -1,6 +1,6 @@
-# Production stack on VPS01, installed in /srv/docker/yagpdb by yagpdb-deploy from
-# the image it deploys (docs/DEPLOYMENT.md). YAGPDB_IMAGE is set by yagpdb-deploy.
-name: yagpdb
+# Production stack on VPS01, installed in /srv/docker/steward by steward-deploy from
+# the image it deploys (docs/DEPLOYMENT.md). STEWARD_IMAGE is set by steward-deploy.
+name: steward
 
 services:
   postgres:
@@ -29,7 +29,7 @@ services:
     # redis:alpine uid/gid; the overridden command bypasses the entrypoint's privilege drop.
     user: "999:1000"
     # YAGPDB stores most plugin settings in Redis: persist with AOF and never evict.
-    # No password (YAGPDB cannot send one): the "cache" network only joins redis and yagpdb.
+    # No password (YAGPDB cannot send one): the "cache" network only joins redis and steward.
     command:
       - redis-server
       - --appendonly
@@ -64,7 +64,7 @@ services:
       PGHOST: postgres
       PGUSER: postgres
       PGDATABASE: postgres
-    secrets: [postgres_admin_password, yagpdb_db_password]
+    secrets: [postgres_admin_password, steward_db_password]
     volumes: [./runtime/db-init.sh:/usr/local/bin/db-init.sh:ro]
     entrypoint: ["/usr/local/bin/db-init.sh"]
     depends_on:
@@ -76,16 +76,16 @@ services:
     tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
     pids_limit: 50
 
-  yagpdb:
-    image: ${YAGPDB_IMAGE:?YAGPDB_IMAGE is required}
+  steward:
+    image: ${STEWARD_IMAGE:?STEWARD_IMAGE is required}
     restart: unless-stopped
     command: ["-all", "-https=false", "-exthttps=true"]
-    env_file: [./yagpdb.env]
-    # Infrastructure settings win over yagpdb.env.
+    env_file: [./steward.env]
+    # Infrastructure settings win over steward.env.
     environment:
       YAGPDB_PQHOST: postgres
-      YAGPDB_PQUSERNAME: yagpdb
-      YAGPDB_PQDB: yagpdb
+      YAGPDB_PQUSERNAME: steward
+      YAGPDB_PQDB: steward
       YAGPDB_REDIS: redis:6379
       YAGPDB_WEB_HTTP_ADDRESS: "5000"
       YAGPDB_WEB_REVERSE_PROXY_CLIENT_IP_HEADER: X-Real-IP
@@ -97,8 +97,8 @@ services:
       # (yagpdb.custom.message_log_retention_days, editable in /admin/config).
       YAGPDB_ENABLE_MESSAGE_LOG_PURGE: "false"
     volumes:
-      - yagpdb_data:/data
-      - ./secrets/app:/run/secrets/yagpdb:ro
+      - steward_data:/data
+      - ./secrets/app:/run/secrets/steward:ro
     depends_on:
       db-init: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
@@ -125,11 +125,11 @@ services:
     command: ["nginx", "-g", "daemon off;"]
     volumes: [./runtime/nginx.conf:/etc/nginx/nginx.conf:ro]
     depends_on:
-      yagpdb: { condition: service_healthy }
+      steward: { condition: service_healthy }
     networks:
       frontend: {}
       proxy_net:
-        aliases: [yagpdb-edge]
+        aliases: [steward-edge]
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/robots.txt || exit 1"]
       interval: 15s
@@ -153,7 +153,7 @@ networks:
   egress:
     driver: bridge
     driver_opts:
-      com.docker.network.bridge.name: yagpdb-eg
+      com.docker.network.bridge.name: steward-eg
       com.docker.network.bridge.enable_icc: "false"
     ipam: { config: [{ subnet: 10.251.1.48/28 }] }
   proxy_net: { external: true }
@@ -161,8 +161,8 @@ networks:
 volumes:
   postgres_data:
   redis_data:
-  yagpdb_data:
+  steward_data:
 
 secrets:
   postgres_admin_password: { file: ./secrets/postgres_admin_password }
-  yagpdb_db_password: { file: ./secrets/app/YAGPDB_PQPASSWORD }
+  steward_db_password: { file: ./secrets/app/YAGPDB_PQPASSWORD }

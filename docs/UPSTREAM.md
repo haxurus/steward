@@ -1,6 +1,6 @@
 # Sincronizzazione con l'upstream
 
-Il fork `haxurus/yagpdb` segue `botlabs-gg/yagpdb` con due branch, come Muse:
+Steward (`haxurus/steward`) è il fork Haxurus di YAGPDB e segue `botlabs-gg/yagpdb` con due branch, come Muse:
 
 | Branch | Contenuto |
 |---|---|
@@ -28,7 +28,7 @@ L'obiettivo è che ogni aggiornamento upstream si unisca senza conflitti. Per qu
 Regole:
 
 - una funzione nuova va in un plugin in `custom/`, non dentro un plugin upstream;
-- per cambiare il comportamento di un plugin upstream, preferire la configurazione (`yagpdb.env`, `/admin/config`) o un plugin custom che lo affianca;
+- per cambiare il comportamento di un plugin upstream, preferire la configurazione (`steward.env`, `/admin/config`) o un plugin custom che lo affianca;
 - non aggiornare dipendenze in `go.mod` nel fork: arrivano dall'upstream (vedi [DEPENDENCIES.md](DEPENDENCIES.md)); fa eccezione una correzione di sicurezza urgente, da proporre anche upstream.
 
 ## Sincronizzazione automatica
@@ -46,10 +46,11 @@ Il branch `sync/upstream` viene ricreato a ogni esecuzione (force push): non com
 ### Prima del merge di una PR di sync
 
 - CI verde.
-- `breaking_changes.md`: se è cambiato, leggere le novità. Variabili rinominate o default cambiati vanno riportati in `/srv/docker/yagpdb/yagpdb.env` e in `deploy/yagpdb.env.example` **prima** del deploy.
-- `yagpdb_docker/Dockerfile` e `yagpdb_docker/app.example.env`: se cambia la versione di Go, di Alpine o un pacchetto di sistema, allineare `deploy/Dockerfile`. Una nuova variabile d'ambiente obbligatoria va in `yagpdb.env`.
+- `breaking_changes.md`: se è cambiato, leggere le novità. Variabili rinominate o default cambiati vanno riportati in `/srv/docker/steward/steward.env` e in `deploy/steward.env.example` **prima** del deploy.
+- `yagpdb_docker/Dockerfile` e `yagpdb_docker/app.example.env`: se cambia la versione di Go, di Alpine o un pacchetto di sistema, allineare `deploy/Dockerfile`. Una nuova variabile d'ambiente obbligatoria va in `steward.env`.
 - `cmd/yagpdb/main.go`: plugin nuovi o rimossi. I plugin custom non sono in questo file, quindi qui non ci sono conflitti.
 - Plugin con nuove chiavi API: aggiungere il segreto in `secrets/app/` solo se si vuole usarli.
+- Nome Steward: testi nuovi con "YAGPDB" vengono rinominati da `deploy/rebrand.sed` senza interventi; il job `build` compila la versione rinominata, quindi una regola che non regge più fa fallire la CI della PR di sync. Frasi riscritte per intero (crediti, tagline) vanno aggiornate in `rebrand.sed` se l'upstream le cambia: la CI non fallisce, ma il testo tornerebbe quello generico.
 
 ### Conflitti
 

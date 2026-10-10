@@ -1,5 +1,5 @@
 #!/bin/sh
-# Container entrypoint: exports the secret files mounted in /run/secrets/yagpdb as
+# Container entrypoint: exports the secret files mounted in /run/secrets/steward as
 # environment variables (YAGPDB only reads its configuration from the environment),
 # then runs the bot.
 #
@@ -8,7 +8,7 @@
 # google-credentials.json is passed by path as GOOGLE_APPLICATION_CREDENTIALS.
 set -eu
 
-secrets_dir=/run/secrets/yagpdb
+secrets_dir=/run/secrets/steward
 
 if [ -d "$secrets_dir" ]; then
   for file in "$secrets_dir"/*; do
@@ -28,7 +28,7 @@ if [ -d "$secrets_dir" ]; then
   done
 fi
 
-# Blog posts ship in the image; YAGPDB loads them from ./posts.
-ln -sfn /app/posts /data/posts
+# The upstream blog posts are not shipped: YAGPDB loads ./posts, left empty.
+mkdir -p /data/posts
 
-exec /app/yagpdb "$@"
+exec /app/steward "$@"

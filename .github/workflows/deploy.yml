@@ -10,11 +10,11 @@ permissions:
   packages: write
 
 concurrency:
-  group: yagpdb-production
+  group: steward-production
   cancel-in-progress: false
 
 env:
-  IMAGE: ghcr.io/haxurus/yagpdb
+  IMAGE: ghcr.io/haxurus/steward
 
 jobs:
   validate:
@@ -44,7 +44,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="$(git describe --tags --always)-haxurus"
+          version="$(git describe --tags --always)-steward"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Version: \`$version\`" >> "$GITHUB_STEP_SUMMARY"
 
@@ -59,22 +59,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker buildx create --name yagpdb-builder --driver docker-container --use
+          docker buildx create --name steward-builder --driver docker-container --use
           docker buildx inspect --bootstrap
 
       - name: Build and push
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          # Target of the "support server" and donation links (deploy/rebrand.sh).
+          SUPPORT_URL: ${{ vars.STEWARD_SUPPORT_URL }}
         run: |
           set -euo pipefail
           docker buildx build --pull --platform linux/amd64 \
             -f deploy/Dockerfile \
-            --build-arg "YAGPDB_VERSION=${VERSION}" \
-            --cache-from type=gha,scope=yagpdb \
-            --cache-to type=gha,scope=yagpdb,mode=max \
+            --build-arg "STEWARD_VERSION=${VERSION}" \
+            --build-arg "STEWARD_SUPPORT_URL=${SUPPORT_URL}" \
+            --cache-from type=gha,scope=steward \
+            --cache-to type=gha,scope=steward,mode=max \
             --provenance=mode=max --sbom=true \
-            --label org.opencontainers.image.source=https://github.com/haxurus/yagpdb \
+            --label org.opencontainers.image.source=https://github.com/haxurus/steward \
             --label org.opencontainers.image.revision=${GITHUB_SHA} \
             --label org.opencontainers.image.version=${VERSION} \
             --tag "${IMAGE}:${GITHUB_SHA}" --tag "${IMAGE}:latest" \
@@ -124,4 +127,4 @@ jobs:
           set -euo pipefail
           port=${VPS_PORT:-22}
           ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -p "$port" \
-            "yagpdb-deploy@${VPS_HOST}" "deploy ${IMAGE_REF}"
+            "steward-deploy@${VPS_HOST}" "deploy ${IMAGE_REF}"
