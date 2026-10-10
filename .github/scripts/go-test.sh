@@ -13,10 +13,16 @@ if [ "$#" -eq 0 ]; then
   exit 0
 fi
 
+# Upstream tests that are obsolete and never ran in upstream CI (no database there).
+# Each is replaced by a fork test; remove an entry once upstream fixes the test.
+#   serverstats TestDailyStatsMessages, TestDailyMisc: insert PostgreSQL rows while
+#     RetrieveDailyStats reads Redis -> serverstats/haxurus_dailystats_test.go
+skip_tests='^(TestDailyStatsMessages|TestDailyMisc)$'
+
 report=$(mktemp)
 status=0
 # shellcheck disable=SC2086 # GO_TEST_FLAGS is a list of flags
-go test -json ${GO_TEST_FLAGS:-} "$@" > "$report" || status=$?
+go test -json -skip "$skip_tests" ${GO_TEST_FLAGS:-} "$@" > "$report" || status=$?
 
 jq -r 'select(.Action == "build-output") | .Output' "$report"
 
@@ -51,6 +57,8 @@ silent=$(jq -r 'select(.Action == "output" and (.Output | test("not running test
     echo "Skipped tests:"
     printf '%s\n' "$skipped" | sed 's/^/- /'
   fi
+  echo
+  echo "Obsolete upstream tests excluded on purpose: \`$skip_tests\` (see .github/scripts/go-test.sh)"
 } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
 if [ -n "$silent" ]; then
