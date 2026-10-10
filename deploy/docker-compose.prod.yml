@@ -93,6 +93,9 @@ services:
       YAGPDB_BOTREST_PORT_RANGE: 5100-5100
       # Request logs go to stdout via edge; the file would grow on the data volume.
       YAGPDB_DISABLE_REQUEST_LOGGING: "true"
+      # The fixed 30 day purge of the logs plugin is replaced by custom/logretention
+      # (yagpdb.custom.message_log_retention_days, editable in /admin/config).
+      YAGPDB_ENABLE_MESSAGE_LOG_PURGE: "false"
     volumes:
       - yagpdb_data:/data
       - ./secrets/app:/run/secrets/yagpdb:ro
