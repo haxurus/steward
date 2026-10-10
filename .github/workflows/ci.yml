@@ -1,0 +1,221 @@
+name: CI
+
+on:
+  pull_request:
+  schedule:
+    # Weekly full run on the default branch, so nothing stays untested for long.
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Base commit/branch for targeted tests (empty: full suite)"
+        required: false
+        default: ""
+  # Called by "Build and deploy" and "Sync upstream" with the commit the change starts from.
+  workflow_call:
+    inputs:
+      base:
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Same toolchain settings as the production image (deploy/Dockerfile).
+  GOEXPERIMENT: jsonv2
+
+jobs:
+  scope:
+    name: scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      packages: ${{ steps.affected.outputs.packages }}
+      full: ${{ steps.affected.outputs.full }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Latest 1.26 patch release (go.mod pins only the minimum, 1.26.0).
+          go-version: "1.26"
+          check-latest: true
+
+      - name: Select packages to test
+        id: affected
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          INPUT_BASE: ${{ inputs.base }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            pull_request) base="$PR_BASE" ;;
+            schedule) base="" ;;
+            *) base="$INPUT_BASE" ;;
+          esac
+          packages=$(.github/scripts/affected-packages.sh "$base" | tr '\n' ' ' | sed 's/ *$//')
+          full=false
+          [ "$packages" = "./..." ] && full=true
+          echo "packages=$packages" >> "$GITHUB_OUTPUT"
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Test scope"
+            echo
+            echo "Base: \`${base:-none}\` (event: $EVENT)"
+            echo
+            if [ -z "$packages" ]; then
+              echo "No Go package affected: tests skipped, build still runs."
+            elif [ "$full" = true ]; then
+              echo "Full suite (\`./...\`)."
+            else
+              printf -- '- `%s`\n' $packages
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check shell scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t scripts < <(
+            { find .github/scripts -type f -name '*.sh'
+              find ops security deploy/runtime -type f 2>/dev/null | while IFS= read -r f; do
+                head -n1 "$f" | grep -q '^#!.*sh' && printf '%s\n' "$f"
+              done
+            } | sort -u)
+          printf 'Checking %s\n' "${scripts[@]}"
+          shellcheck --severity=warning "${scripts[@]}"
+
+  build:
+    name: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Latest 1.26 patch release (go.mod pins only the minimum, 1.26.0).
+          go-version: "1.26"
+          check-latest: true
+
+      - name: Build every package
+        run: go build ./...
+
+      - name: Build binaries
+        env:
+          CGO_ENABLED: "0"
+        run: go build -o "$RUNNER_TEMP/bin/" ./cmd/yagpdb ./cmd/shardorchestrator ./cmd/capturepanics
+
+  test:
+    name: test
+    needs: scope
+    if: needs.scope.outputs.packages != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: yagpdb_test
+          POSTGRES_PASSWORD: yagpdb_test
+          POSTGRES_DB: yagpdb_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U yagpdb_test -d yagpdb_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      YAGPDB_TEST_PQ_HOST: localhost
+      YAGPDB_TEST_PQ_USER: yagpdb_test
+      YAGPDB_TEST_PQ_PASSWORD: yagpdb_test
+      YAGPDB_TEST_PQ_DB: yagpdb_test
+      YAGPDB_REDIS: localhost:6379
+      # Tests added by this fork fail instead of skipping when a service is missing.
+      YAGPDB_TEST_REQUIRE_SERVICES: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Latest 1.26 patch release (go.mod pins only the minimum, 1.26.0).
+          go-version: "1.26"
+          check-latest: true
+
+      - name: Install ffmpeg
+        # lib/dca (soundboard audio) encodes test files with ffmpeg/ffprobe.
+        if: needs.scope.outputs.full == 'true' || contains(needs.scope.outputs.packages, '/lib/dca')
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends ffmpeg
+
+      - name: Test
+        shell: bash
+        env:
+          PACKAGES: ${{ needs.scope.outputs.packages }}
+          # A hung test fails its package after 5 minutes instead of 10. Full runs ignore
+          # the test cache: they exist to re-verify everything.
+          GO_TEST_FLAGS: -timeout=5m ${{ needs.scope.outputs.full == 'true' && '-count=1' || '' }}
+        run: |
+          # shellcheck disable=SC2086 # PACKAGES is a space-separated list
+          .github/scripts/go-test.sh $PACKAGES
+
+  vulncheck:
+    name: vulncheck
+    needs: scope
+    # Dependencies only change with go.mod/go.sum, which always selects the full suite.
+    if: needs.scope.outputs.full == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Latest 1.26 patch release (go.mod pins only the minimum, 1.26.0).
+          go-version: "1.26"
+          check-latest: true
+
+      - name: govulncheck (report only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          status=0
+          "$(go env GOPATH)/bin/govulncheck" ./... > "$RUNNER_TEMP/vuln.txt" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/vuln.txt"
+          {
+            echo "### govulncheck (exit $status)"
+            echo
+            echo '```'
+            grep -E '^(Vulnerability #|  [A-Z].*|    Found in|    Fixed in|Your code is affected|No vulnerabilities)' "$RUNNER_TEMP/vuln.txt" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
