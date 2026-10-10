@@ -180,7 +180,7 @@ jobs:
           printf 'token-value\n' > "$dir/YAGPDB_BOTTOKEN"
           : > "$dir/YAGPDB_TWITCH_CLIENTSECRET"
           printf 'x' > "$dir/not-a-variable"
-          chmod 644 "$dir"/*
+          chmod 755 "$dir" && chmod 644 "$dir"/*
           out=$(docker run --rm -v "$dir:/run/secrets/yagpdb:ro" --entrypoint sh yagpdb-ci -c \
             'sed "s#exec /app/yagpdb.*#env#" /app/entrypoint.sh > /tmp/e.sh && sh /tmp/e.sh')
           grep -qx 'YAGPDB_BOTTOKEN=token-value' <<< "$out"
