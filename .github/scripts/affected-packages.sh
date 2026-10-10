@@ -39,7 +39,7 @@ while IFS= read -r file; do
 done <<< "$changed"
 
 root=$(pwd)
-declare -A pkg_of_dir
+declare -A pkg_of_dir=()
 while IFS=$'\t' read -r dir path; do
   rel=${dir#"$root"}
   rel=${rel#/}
@@ -48,7 +48,7 @@ done < <(go list -e -f '{{.Dir}}{{"\t"}}{{.ImportPath}}' ./...)
 
 # A changed file belongs to the nearest enclosing package: this covers templates and
 # other files embedded with //go:embed from subdirectories.
-declare -A touched
+declare -A touched=()
 while IFS= read -r file; do
   dir=$(dirname "$file")
   while :; do
