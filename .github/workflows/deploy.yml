@@ -1,0 +1,127 @@
+name: Build and deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: yagpdb-production
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/haxurus/yagpdb
+
+jobs:
+  validate:
+    # Tests only the packages changed by this push (and their dependents): the rest
+    # was verified by earlier runs. A manual run has no "before" and tests everything.
+    uses: ./.github/workflows/ci.yml
+    with:
+      base: ${{ github.event.before }}
+    permissions:
+      contents: read
+
+  build:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    outputs:
+      image_ref: ${{ steps.refs.outputs.image_ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history and tags for `git describe` (tags come from upstream sync).
+          fetch-depth: 0
+
+      - name: Version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(git describe --tags --always)-haxurus"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Version: \`$version\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Login to GHCR
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+      - name: Create Buildx builder
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx create --name yagpdb-builder --driver docker-container --use
+          docker buildx inspect --bootstrap
+
+      - name: Build and push
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker buildx build --pull --platform linux/amd64 \
+            -f deploy/Dockerfile \
+            --build-arg "YAGPDB_VERSION=${VERSION}" \
+            --cache-from type=gha,scope=yagpdb \
+            --cache-to type=gha,scope=yagpdb,mode=max \
+            --provenance=mode=max --sbom=true \
+            --label org.opencontainers.image.source=https://github.com/haxurus/yagpdb \
+            --label org.opencontainers.image.revision=${GITHUB_SHA} \
+            --label org.opencontainers.image.version=${VERSION} \
+            --tag "${IMAGE}:${GITHUB_SHA}" --tag "${IMAGE}:latest" \
+            --metadata-file /tmp/metadata.json --push .
+
+      - name: Export immutable image reference
+        id: refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest=$(jq -r '."containerimage.digest"' /tmp/metadata.json)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "image_ref=${IMAGE}@${digest}" >> "$GITHUB_OUTPUT"
+          echo "Image: \`${IMAGE}@${digest}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    # Defence in depth only: the real gate is the `production` environment's
+    # branch policy (main only) and required reviewers, see docs/DEPLOYMENT.md.
+    if: ${{ github.ref == 'refs/heads/main' && vars.ENABLE_VPS_DEPLOY == 'true' }}
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Configure restricted SSH key
+        shell: bash
+        env:
+          DEPLOY_KEY: ${{ secrets.VPS_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy immutable release
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          IMAGE_REF: ${{ needs.build.outputs.image_ref }}
+        run: |
+          set -euo pipefail
+          port=${VPS_PORT:-22}
+          ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -p "$port" \
+            "yagpdb-deploy@${VPS_HOST}" "deploy ${IMAGE_REF}"

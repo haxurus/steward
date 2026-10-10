@@ -1,0 +1,31 @@
+#!/bin/sh
+# Forced command of the yagpdb-deploy SSH key: only deploy, rollback and status are
+# accepted, and the image must be a ghcr.io/haxurus/yagpdb digest.
+set -eu
+set -f
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+original=${SSH_ORIGINAL_COMMAND:-}
+[ -n "$original" ] || { echo 'command required' >&2; exit 126; }
+# shellcheck disable=SC2086 # split the command into words; globbing is off (set -f)
+set -- $original
+
+case "${1:-}" in
+  deploy)
+    [ "$#" -eq 2 ] || { echo 'invalid deploy command' >&2; exit 126; }
+    case "$2" in ghcr.io/haxurus/yagpdb@sha256:*) ;; *) echo 'invalid image' >&2; exit 126 ;; esac
+    exec sudo -n /usr/local/sbin/yagpdb-deploy deploy "$2"
+    ;;
+  rollback)
+    [ "$#" -eq 1 ] || { echo 'invalid rollback command' >&2; exit 126; }
+    exec sudo -n /usr/local/sbin/yagpdb-deploy rollback
+    ;;
+  status)
+    [ "$#" -eq 1 ] || { echo 'invalid status command' >&2; exit 126; }
+    exec sudo -n /usr/local/sbin/yagpdb-deploy status
+    ;;
+  *)
+    echo 'command not allowed' >&2
+    exit 126
+    ;;
+esac

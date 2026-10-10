@@ -1,0 +1,16 @@
+# Used only by deploy/Dockerfile (BuildKit picks <Dockerfile>.dockerignore), so the
+# upstream yagpdb_docker build keeps its own context with .git.
+.git
+.github
+.vscode
+**/*.env
+!deploy/yagpdb.env.example
+**/secrets
+**/backups
+**/*.log
+**/shutdown_logs
+**/soundboard/queue
+**/soundboard/ready
+**/safebrowsing_db
+yagpdb_deploy
+yagpdb_deploy.pub
