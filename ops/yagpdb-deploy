@@ -1,0 +1,283 @@
+#!/bin/sh
+# Deploys, rolls back and reports the YAGPDB release on VPS01 (docs/DEPLOYMENT.md).
+# Run as root; GitHub Actions reaches it only through yagpdb-deploy-entrypoint.
+#
+# Releases are immutable image digests. The Compose file and runtime files are taken
+# from /opt/yagpdb-deploy inside the image being started, so a rollback also restores
+# the configuration of the previous release.
+set -eu
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+REPO=ghcr.io/haxurus/yagpdb
+STATE_DIR=/srv/docker/yagpdb
+COMPOSE_FILE="$STATE_DIR/docker-compose.yml"
+APP_ENV="$STATE_DIR/yagpdb.env"
+CURRENT_FILE="$STATE_DIR/.release"
+PREVIOUS_FILE="$STATE_DIR/.previous-release"
+BACKUP_DIR="$STATE_DIR/backups"
+LOG_DIR="$STATE_DIR/logs"
+PROJECT=yagpdb
+LOCK_FILE=/run/yagpdb-deploy.lock
+HEALTH_SERVICES='yagpdb edge'
+HEALTH_TIMEOUT=300
+
+log() { printf '[yagpdb-deploy] %s\n' "$*"; }
+die() { printf '[yagpdb-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || die 'must run as root'
+[ -f "$APP_ENV" ] || die "missing $APP_ENV (run ops/install-vps.sh)"
+
+valid_ref() {
+  # Pattern matching on the whole value: unlike grep, embedded newlines cannot pass.
+  case "$1" in "$REPO"@sha256:*) ;; *) return 1 ;; esac
+  digest=${1#"$REPO"@sha256:}
+  [ "${#digest}" -eq 64 ] || return 1
+  case "$digest" in *[!0-9a-f]*) return 1 ;; esac
+}
+
+read_release() {
+  IMAGE=''
+  [ -f "$1" ] || return 1
+  while IFS='=' read -r key value; do
+    [ "$key" = IMAGE ] && IMAGE="$value"
+  done < "$1"
+  valid_ref "$IMAGE"
+}
+
+write_release() {
+  tmp="$1.tmp.$$"
+  (umask 077; printf 'IMAGE=%s\n' "$2" > "$tmp")
+  mv -f "$tmp" "$1"
+}
+
+compose() {
+  image="$1"; shift
+  YAGPDB_IMAGE="$image" docker compose --project-name "$PROJECT" --project-directory "$STATE_DIR" \
+    -f "$COMPOSE_FILE" "$@"
+}
+
+# Copies the deployment bundle of IMAGE into STAGING.
+extract_bundle() {
+  image="$1"; staging="$2"
+  cid=$(docker create "$image") || return 1
+  status=0
+  docker cp "$cid:/opt/yagpdb-deploy/." "$staging" >/dev/null || status=1
+  docker rm "$cid" >/dev/null 2>&1 || true
+  [ "$status" -eq 0 ] && [ -f "$staging/docker-compose.yml" ] && [ -f "$staging/runtime/nginx.conf" ] && [ -f "$staging/runtime/db-init.sh" ]
+}
+
+# Installs the bundle of IMAGE as the active configuration after validating it.
+install_bundle() {
+  image="$1"
+  staging=$(mktemp -d "$STATE_DIR/.bundle.XXXXXX")
+  if ! extract_bundle "$image" "$staging"; then
+    rm -rf "$staging"
+    log 'the image has no valid deployment bundle'
+    return 1
+  fi
+  if ! YAGPDB_IMAGE="$image" docker compose --project-name "$PROJECT" --project-directory "$STATE_DIR" \
+      -f "$staging/docker-compose.yml" config -q; then
+    rm -rf "$staging"
+    log 'the Compose configuration of the image is invalid'
+    return 1
+  fi
+  install -d -o root -g root -m 755 "$STATE_DIR/runtime"
+  install -o root -g root -m 600 "$staging/docker-compose.yml" "$COMPOSE_FILE"
+  install -o root -g root -m 644 "$staging/runtime/nginx.conf" "$STATE_DIR/runtime/nginx.conf"
+  install -o root -g root -m 755 "$staging/runtime/db-init.sh" "$STATE_DIR/runtime/db-init.sh"
+  install -o root -g root -m 600 "$staging/yagpdb.env.example" "$STATE_DIR/yagpdb.env.example"
+  rm -rf "$staging"
+}
+
+backup_data() {
+  image="$1"
+  install -d -o root -g root -m 700 "$BACKUP_DIR"
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+
+  if [ -n "$(compose "$image" ps -q postgres 2>/dev/null || true)" ]; then
+    out="$BACKUP_DIR/predeploy-$stamp.pgdump"
+    log 'backing up PostgreSQL'
+    if ! (umask 077; compose "$image" exec -T postgres sh -c \
+        'export PGPASSWORD="$(cat /run/secrets/postgres_admin_password)"; exec pg_dump -Fc -U postgres yagpdb' > "$out"); then
+      rm -f "$out"
+      die 'PostgreSQL backup failed; deployment aborted'
+    fi
+  fi
+
+  # Most YAGPDB settings live in Redis: snapshot it too.
+  if [ -n "$(compose "$image" ps -q redis 2>/dev/null || true)" ]; then
+    out="$BACKUP_DIR/predeploy-$stamp.rdb"
+    log 'backing up Redis'
+    if ! compose "$image" exec -T redis redis-cli SAVE >/dev/null ||
+       ! (umask 077; compose "$image" exec -T redis cat /data/dump.rdb > "$out"); then
+      rm -f "$out"
+      die 'Redis backup failed; deployment aborted'
+    fi
+  fi
+
+  # Prune only after a good backup: a failing one never leaves zero copies.
+  find "$BACKUP_DIR" -type f -name 'predeploy-*' -mtime +14 -delete 2>/dev/null || true
+}
+
+# Image references a rollback can still need; every other YAGPDB image is garbage.
+keep_refs() {
+  for file in "$CURRENT_FILE" "$PREVIOUS_FILE"; do
+    read_release "$file" && printf '%s\n' "$IMAGE"
+  done
+  for ref in "$@"; do printf '%s\n' "$ref"; done
+}
+
+prune_images() {
+  keep=$(keep_refs "$@")
+  docker image ls --no-trunc --format '{{.Repository}}@{{.Digest}}' "$REPO" 2>/dev/null |
+    while IFS= read -r ref; do
+      case "$ref" in *@sha256:*) ;; *) continue ;; esac
+      printf '%s\n' "$keep" | grep -Fxq "$ref" && continue
+      docker image rm "$ref" >/dev/null 2>&1 || true
+    done
+  docker image prune -f >/dev/null 2>&1 || true
+}
+
+free_kb() {
+  df -Pk /var/lib/docker 2>/dev/null | awk 'NR == 2 { print $4 }'
+}
+
+# Refuse to start a release (and its backup) on a nearly full disk.
+ensure_disk_space() {
+  available=$(free_kb)
+  [ -n "$available" ] || return 0
+  [ "$available" -ge $((5 * 1024 * 1024)) ] && return 0
+  log "low disk space ($((available / 1024)) MiB free): pruning old YAGPDB images"
+  prune_images "$@"
+  available=$(free_kb)
+  [ "$available" -ge $((3 * 1024 * 1024)) ] || die 'less than 3 GiB free on /var/lib/docker; free space before deploying'
+}
+
+wait_healthy() {
+  image="$1"
+  deadline=$(( $(date +%s) + HEALTH_TIMEOUT ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    all_ok=1
+    for svc in $HEALTH_SERVICES; do
+      cid=$(compose "$image" ps -q "$svc" 2>/dev/null || true)
+      [ -n "$cid" ] || { all_ok=0; break; }
+      state=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" 2>/dev/null || true)
+      case "$state" in
+        healthy) ;;
+        exited | dead) return 1 ;;
+        *) all_ok=0; break ;;
+      esac
+    done
+    [ "$all_ok" -eq 1 ] && return 0
+    sleep 5
+  done
+  return 1
+}
+
+# Installs the bundle of IMAGE and starts it; succeeds once every service is healthy.
+start_release() {
+  image="$1"
+  install_bundle "$image" || return 1
+  compose "$image" up -d --remove-orphans && wait_healthy "$image"
+}
+
+save_failure_logs() {
+  # Service logs can contain personal data: keep them on the VPS (root-only),
+  # never in the SSH output that ends up in GitHub Actions logs.
+  install -d -o root -g root -m 700 "$LOG_DIR"
+  failure_log="$LOG_DIR/deploy-failed-$(date -u +%Y%m%dT%H%M%SZ).log"
+  (umask 077; compose "$1" logs --no-color --tail=300 yagpdb edge db-init > "$failure_log" 2>&1) || true
+  find "$LOG_DIR" -type f -name 'deploy-failed-*.log' -mtime +30 -delete 2>/dev/null || true
+  log "service logs saved on the VPS: $failure_log"
+}
+
+deploy_release() {
+  new="$1"
+  valid_ref "$new" || die 'invalid image reference'
+  ensure_disk_space "$new"
+
+  old=''
+  if read_release "$CURRENT_FILE"; then
+    old="$IMAGE"
+    [ "$old" != "$new" ] || { log 'release already running'; status_release; return 0; }
+    backup_data "$old"
+  fi
+
+  log 'pulling image'
+  docker pull -q "$new" >/dev/null
+
+  log 'starting release'
+  if start_release "$new"; then
+    [ -z "$old" ] || write_release "$PREVIOUS_FILE" "$old"
+    write_release "$CURRENT_FILE" "$new"
+    compose "$new" rm -f db-init >/dev/null 2>&1 || true
+    prune_images
+    log 'deployment healthy'
+    compose "$new" ps
+    return 0
+  fi
+
+  log 'the new release failed its health checks'
+  save_failure_logs "$new"
+  if [ -n "$old" ]; then
+    log 'restoring the previous release'
+    start_release "$old" || log 'the previous release is not healthy either: manual intervention required'
+  fi
+  die 'deployment failed'
+}
+
+rollback_release() {
+  read_release "$PREVIOUS_FILE" || die 'no previous release recorded'
+  previous="$IMAGE"
+  current=''
+  read_release "$CURRENT_FILE" && current="$IMAGE"
+
+  [ -z "$current" ] || backup_data "$current"
+  docker pull -q "$previous" >/dev/null
+  if start_release "$previous"; then
+    write_release "$CURRENT_FILE" "$previous"
+    [ -z "$current" ] || write_release "$PREVIOUS_FILE" "$current"
+    prune_images
+    log 'rollback healthy'
+    compose "$previous" ps
+    return 0
+  fi
+
+  save_failure_logs "$previous"
+  if [ -n "$current" ]; then
+    log 'restoring the release that was running'
+    start_release "$current" || true
+  fi
+  die 'rollback failed; manual intervention required'
+}
+
+status_release() {
+  if read_release "$CURRENT_FILE"; then
+    printf 'Current:  %s\n' "$IMAGE"
+    current="$IMAGE"
+    read_release "$PREVIOUS_FILE" && printf 'Previous: %s\n' "$IMAGE"
+    compose "$current" ps
+  else
+    printf 'No release recorded yet.\n'
+  fi
+}
+
+# One operation at a time: a manual run must not interleave with a GitHub deploy.
+exec 9>"$LOCK_FILE"
+flock -n 9 || die "another yagpdb-deploy operation is running (lock: $LOCK_FILE)"
+
+case "${1:-}" in
+  deploy)
+    [ "$#" -eq 2 ] || die 'usage: yagpdb-deploy deploy IMAGE@sha256:DIGEST'
+    deploy_release "$2"
+    ;;
+  rollback)
+    [ "$#" -eq 1 ] || die 'usage: yagpdb-deploy rollback'
+    rollback_release
+    ;;
+  status)
+    [ "$#" -eq 1 ] || die 'usage: yagpdb-deploy status'
+    status_release
+    ;;
+  *) die 'allowed commands: deploy, rollback, status' ;;
+esac

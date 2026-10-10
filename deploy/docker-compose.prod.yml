@@ -1,0 +1,165 @@
+# Production stack on VPS01, installed in /srv/docker/yagpdb by yagpdb-deploy from
+# the image it deploys (docs/DEPLOYMENT.md). YAGPDB_IMAGE is set by yagpdb-deploy.
+name: yagpdb
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password
+      POSTGRES_DB: postgres
+    secrets: [postgres_admin_password]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    networks: [db]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 150
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m", "/var/run/postgresql:rw,nosuid,size=8m"]
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    # redis:alpine uid/gid; the overridden command bypasses the entrypoint's privilege drop.
+    user: "999:1000"
+    # YAGPDB stores most plugin settings in Redis: persist with AOF and never evict.
+    # No password (YAGPDB cannot send one): the "cache" network only joins redis and yagpdb.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --protected-mode
+      - "no"
+      - --bind
+      - 0.0.0.0
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - noeviction
+    volumes: [redis_data:/data]
+    networks: [cache]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    pids_limit: 100
+    mem_limit: 768m
+    cpus: 0.5
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+
+  db-init:
+    image: postgres:17-alpine
+    restart: "no"
+    environment:
+      PGHOST: postgres
+      PGUSER: postgres
+      PGDATABASE: postgres
+    secrets: [postgres_admin_password, yagpdb_db_password]
+    volumes: [./runtime/db-init.sh:/usr/local/bin/db-init.sh:ro]
+    entrypoint: ["/usr/local/bin/db-init.sh"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [db]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    pids_limit: 50
+
+  yagpdb:
+    image: ${YAGPDB_IMAGE:?YAGPDB_IMAGE is required}
+    restart: unless-stopped
+    command: ["-all", "-https=false", "-exthttps=true"]
+    env_file: [./yagpdb.env]
+    # Infrastructure settings win over yagpdb.env.
+    environment:
+      YAGPDB_PQHOST: postgres
+      YAGPDB_PQUSERNAME: yagpdb
+      YAGPDB_PQDB: yagpdb
+      YAGPDB_REDIS: redis:6379
+      YAGPDB_WEB_HTTP_ADDRESS: "5000"
+      YAGPDB_WEB_REVERSE_PROXY_CLIENT_IP_HEADER: X-Real-IP
+      # Fixed internal API port (127.0.0.1 only) so the healthcheck can reach it.
+      YAGPDB_BOTREST_PORT_RANGE: 5100-5100
+      # Request logs go to stdout via edge; the file would grow on the data volume.
+      YAGPDB_DISABLE_REQUEST_LOGGING: "true"
+    volumes:
+      - yagpdb_data:/data
+      - ./secrets/app:/run/secrets/yagpdb:ro
+    depends_on:
+      db-init: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    networks: [db, cache, frontend, egress]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5000/robots.txt && wget -q -O /dev/null http://127.0.0.1:5100/ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    init: true
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    pids_limit: 300
+    mem_limit: 1536m
+    cpus: 2.0
+
+  edge:
+    image: nginx:1.30-alpine
+    restart: unless-stopped
+    user: "101:101"
+    command: ["nginx", "-g", "daemon off;"]
+    volumes: [./runtime/nginx.conf:/etc/nginx/nginx.conf:ro]
+    depends_on:
+      yagpdb: { condition: service_healthy }
+    networks:
+      frontend: {}
+      proxy_net:
+        aliases: [yagpdb-edge]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/robots.txt || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 10s
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m", "/var/cache/nginx:rw,nosuid,size=16m"]
+    pids_limit: 80
+    mem_limit: 128m
+    cpus: 0.25
+
+networks:
+  # Fixed /28 subnets in 10.251.1.0/24 (Dispatch uses 10.251.0.0/24): on VPS01 Docker's
+  # default address pools are exhausted by the other stacks.
+  db: { internal: true, ipam: { config: [{ subnet: 10.251.1.0/28 }] } }
+  cache: { internal: true, ipam: { config: [{ subnet: 10.251.1.16/28 }] } }
+  frontend: { internal: true, ipam: { config: [{ subnet: 10.251.1.32/28 }] } }
+  egress:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: yagpdb-eg
+      com.docker.network.bridge.enable_icc: "false"
+    ipam: { config: [{ subnet: 10.251.1.48/28 }] }
+  proxy_net: { external: true }
+
+volumes:
+  postgres_data:
+  redis_data:
+  yagpdb_data:
+
+secrets:
+  postgres_admin_password: { file: ./secrets/postgres_admin_password }
+  yagpdb_db_password: { file: ./secrets/app/YAGPDB_PQPASSWORD }

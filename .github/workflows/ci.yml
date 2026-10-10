@@ -38,6 +38,7 @@ jobs:
     outputs:
       packages: ${{ steps.affected.outputs.packages }}
       full: ${{ steps.affected.outputs.full }}
+      image: ${{ steps.affected.outputs.image }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -68,8 +69,16 @@ jobs:
           packages=$(.github/scripts/affected-packages.sh "$base" | tr '\n' ' ' | sed 's/ *$//')
           full=false
           [ "$packages" = "./..." ] && full=true
+          # The production image is rebuilt only when its inputs outside Go code change.
+          image=true
+          if [ "$full" = false ]; then
+            ref=$base
+            git cat-file -e "$ref^{commit}" 2>/dev/null || ref="origin/$base"
+            git diff --name-only "$ref" HEAD | grep -qE '^(deploy/|cmd/yagpdb/posts/)' || image=false
+          fi
           echo "packages=$packages" >> "$GITHUB_OUTPUT"
           echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
           {
             echo "### Test scope"
             echo
@@ -127,6 +136,56 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: go build -o "$RUNNER_TEMP/bin/" ./cmd/yagpdb ./cmd/shardorchestrator ./cmd/capturepanics
+
+  deploy-config:
+    name: deploy-config
+    needs: scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate production Compose
+        shell: bash
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          mkdir -p "$work/secrets/app" "$work/runtime"
+          : > "$work/secrets/postgres_admin_password"
+          : > "$work/secrets/app/YAGPDB_PQPASSWORD"
+          cp deploy/yagpdb.env.example "$work/yagpdb.env"
+          YAGPDB_IMAGE="ghcr.io/haxurus/yagpdb@sha256:$(printf 'a%.0s' {1..64})" \
+            docker compose --project-name yagpdb --project-directory "$work" \
+            -f deploy/docker-compose.prod.yml config -q
+
+      - name: Build production image
+        if: needs.scope.outputs.image == 'true'
+        run: docker build -f deploy/Dockerfile --build-arg YAGPDB_VERSION=ci-check -t yagpdb-ci .
+
+      - name: Smoke test production image
+        if: needs.scope.outputs.image == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Entrypoint, writable /data and the binary itself.
+          [ "$(docker run --rm yagpdb-ci -version)" = ci-check ]
+          # Deployment bundle read by ops/yagpdb-deploy.
+          docker run --rm --entrypoint sh yagpdb-ci -c \
+            'test -f /opt/yagpdb-deploy/docker-compose.yml && test -f /opt/yagpdb-deploy/yagpdb.env.example &&
+             test -f /opt/yagpdb-deploy/runtime/nginx.conf && test -x /opt/yagpdb-deploy/runtime/db-init.sh &&
+             test "$(id -u)" = 10001'
+          # Secret files become environment variables; empty and badly named files do not.
+          dir=$(mktemp -d)
+          printf 'token-value\n' > "$dir/YAGPDB_BOTTOKEN"
+          : > "$dir/YAGPDB_TWITCH_CLIENTSECRET"
+          printf 'x' > "$dir/not-a-variable"
+          chmod 755 "$dir" && chmod 644 "$dir"/*
+          out=$(docker run --rm -v "$dir:/run/secrets/yagpdb:ro" --entrypoint sh yagpdb-ci -c \
+            'sed "s#exec /app/yagpdb.*#env#" /app/entrypoint.sh > /tmp/e.sh && sh /tmp/e.sh')
+          grep -qx 'YAGPDB_BOTTOKEN=token-value' <<< "$out"
+          ! grep -q 'YAGPDB_TWITCH_CLIENTSECRET' <<< "$out"
+          ! grep -q 'not-a-variable' <<< "$out"
 
   test:
     name: test
