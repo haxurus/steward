@@ -1,0 +1,24 @@
+# Go modules are deliberately not listed: go.mod follows botlabs-gg/yagpdb and is
+# updated by merging upstream (docs/UPSTREAM.md), so the fork never diverges there.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    target-branch: main
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: "/deploy"
+    target-branch: main
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker-compose
+    directory: "/deploy"
+    target-branch: main
+    schedule:
+      interval: weekly
