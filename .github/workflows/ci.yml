@@ -74,7 +74,7 @@ jobs:
           if [ "$full" = false ]; then
             ref=$base
             git cat-file -e "$ref^{commit}" 2>/dev/null || ref="origin/$base"
-            git diff --name-only "$ref" HEAD | grep -qE '^(deploy/|cmd/yagpdb/posts/)' || image=false
+            git diff --name-only "$ref" HEAD | grep -qE '^deploy/' || image=false
           fi
           echo "packages=$packages" >> "$GITHUB_OUTPUT"
           echo "full=$full" >> "$GITHUB_OUTPUT"
@@ -107,7 +107,7 @@ jobs:
           set -euo pipefail
           mapfile -t scripts < <(
             { find .github/scripts -type f -name '*.sh'
-              find ops security deploy/runtime -type f 2>/dev/null | while IFS= read -r f; do
+              find ops security deploy -type f 2>/dev/null | while IFS= read -r f; do
                 head -n1 "$f" | grep -q '^#!.*sh' && printf '%s\n' "$f"
               done
             } | sort -u)
@@ -137,6 +137,21 @@ jobs:
           CGO_ENABLED: "0"
         run: go build -o "$RUNNER_TEMP/bin/" ./cmd/yagpdb ./cmd/shardorchestrator ./cmd/capturepanics
 
+      - name: Build the Steward-branded binary
+        # The image applies deploy/rebrand.sed to the sources before compiling: an
+        # upstream change that breaks a rule must fail here, not in the deploy.
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/rebranded"
+          mkdir -p "$src"
+          git archive HEAD | tar -x -C "$src"
+          sh deploy/rebrand.sh "$src" > "$RUNNER_TEMP/rebranded.txt"
+          echo "Rebranded files: $(wc -l < "$RUNNER_TEMP/rebranded.txt")" >> "$GITHUB_STEP_SUMMARY"
+          (cd "$src" && go build -o "$RUNNER_TEMP/bin/steward" ./cmd/yagpdb)
+
   deploy-config:
     name: deploy-config
     needs: scope
@@ -154,14 +169,14 @@ jobs:
           mkdir -p "$work/secrets/app" "$work/runtime"
           : > "$work/secrets/postgres_admin_password"
           : > "$work/secrets/app/YAGPDB_PQPASSWORD"
-          cp deploy/yagpdb.env.example "$work/yagpdb.env"
-          YAGPDB_IMAGE="ghcr.io/haxurus/yagpdb@sha256:$(printf 'a%.0s' {1..64})" \
-            docker compose --project-name yagpdb --project-directory "$work" \
+          cp deploy/steward.env.example "$work/steward.env"
+          STEWARD_IMAGE="ghcr.io/haxurus/steward@sha256:$(printf 'a%.0s' {1..64})" \
+            docker compose --project-name steward --project-directory "$work" \
             -f deploy/docker-compose.prod.yml config -q
 
       - name: Build production image
         if: needs.scope.outputs.image == 'true'
-        run: docker build -f deploy/Dockerfile --build-arg YAGPDB_VERSION=ci-check -t yagpdb-ci .
+        run: docker build -f deploy/Dockerfile --build-arg STEWARD_VERSION=ci-check -t steward-ci .
 
       - name: Smoke test production image
         if: needs.scope.outputs.image == 'true'
@@ -169,11 +184,11 @@ jobs:
         run: |
           set -euo pipefail
           # Entrypoint, writable /data and the binary itself.
-          [ "$(docker run --rm yagpdb-ci -version)" = ci-check ]
-          # Deployment bundle read by ops/yagpdb-deploy.
-          docker run --rm --entrypoint sh yagpdb-ci -c \
-            'test -f /opt/yagpdb-deploy/docker-compose.yml && test -f /opt/yagpdb-deploy/yagpdb.env.example &&
-             test -f /opt/yagpdb-deploy/runtime/nginx.conf && test -x /opt/yagpdb-deploy/runtime/db-init.sh &&
+          [ "$(docker run --rm steward-ci -version)" = ci-check ]
+          # Deployment bundle read by ops/steward-deploy.
+          docker run --rm --entrypoint sh steward-ci -c \
+            'test -f /opt/steward-deploy/docker-compose.yml && test -f /opt/steward-deploy/steward.env.example &&
+             test -f /opt/steward-deploy/runtime/nginx.conf && test -x /opt/steward-deploy/runtime/db-init.sh &&
              test "$(id -u)" = 10001'
           # Secret files become environment variables; empty and badly named files do not.
           dir=$(mktemp -d)
@@ -181,8 +196,8 @@ jobs:
           : > "$dir/YAGPDB_TWITCH_CLIENTSECRET"
           printf 'x' > "$dir/not-a-variable"
           chmod 755 "$dir" && chmod 644 "$dir"/*
-          out=$(docker run --rm -v "$dir:/run/secrets/yagpdb:ro" --entrypoint sh yagpdb-ci -c \
-            'sed "s#exec /app/yagpdb.*#env#" /app/entrypoint.sh > /tmp/e.sh && sh /tmp/e.sh')
+          out=$(docker run --rm -v "$dir:/run/secrets/steward:ro" --entrypoint sh steward-ci -c \
+            'sed "s#exec /app/steward.*#env#" /app/entrypoint.sh > /tmp/e.sh && sh /tmp/e.sh')
           grep -qx 'YAGPDB_BOTTOKEN=token-value' <<< "$out"
           ! grep -q 'YAGPDB_TWITCH_CLIENTSECRET' <<< "$out"
           ! grep -q 'not-a-variable' <<< "$out"

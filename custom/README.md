@@ -6,7 +6,7 @@ Qui vivono le funzioni aggiunte dal fork. Stanno fuori dai package upstream cos�
 
 | Plugin | Cosa fa | Configurazione |
 |---|---|---|
-| [`logretention`](logretention/logretention.go) | Cancella i message log più vecchi di N giorni, al posto della cancellazione fissa a 30 giorni dell'upstream. Il valore si cambia senza riavvio. | `yagpdb.custom.message_log_retention_days` (default 30, `0` = conserva tutto) da `/admin/config`, oppure `YAGPDB_CUSTOM_MESSAGE_LOG_RETENTION_DAYS` in `yagpdb.env`. Richiede `YAGPDB_ENABLE_MESSAGE_LOG_PURGE=false` (già impostato nel Compose di produzione). |
+| [`logretention`](logretention/logretention.go) | Cancella i message log più vecchi di N giorni, al posto della cancellazione fissa a 30 giorni dell'upstream. Il valore si cambia senza riavvio. | `yagpdb.custom.message_log_retention_days` (default 30, `0` = conserva tutto) da `/admin/config`, oppure `YAGPDB_CUSTOM_MESSAGE_LOG_RETENTION_DAYS` in `steward.env`. Richiede `YAGPDB_ENABLE_MESSAGE_LOG_PURGE=false` (già impostato nel Compose di produzione). |
 
 ## Aggiungere un plugin
 

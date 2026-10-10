@@ -1,6 +1,6 @@
 #!/bin/sh
-# Forced command of the yagpdb-deploy SSH key: only deploy, rollback and status are
-# accepted, and the image must be a ghcr.io/haxurus/yagpdb digest.
+# Forced command of the steward-deploy SSH key: only deploy, rollback and status are
+# accepted, and the image must be a ghcr.io/haxurus/steward digest.
 set -eu
 set -f
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -13,16 +13,16 @@ set -- $original
 case "${1:-}" in
   deploy)
     [ "$#" -eq 2 ] || { echo 'invalid deploy command' >&2; exit 126; }
-    case "$2" in ghcr.io/haxurus/yagpdb@sha256:*) ;; *) echo 'invalid image' >&2; exit 126 ;; esac
-    exec sudo -n /usr/local/sbin/yagpdb-deploy deploy "$2"
+    case "$2" in ghcr.io/haxurus/steward@sha256:*) ;; *) echo 'invalid image' >&2; exit 126 ;; esac
+    exec sudo -n /usr/local/sbin/steward-deploy deploy "$2"
     ;;
   rollback)
     [ "$#" -eq 1 ] || { echo 'invalid rollback command' >&2; exit 126; }
-    exec sudo -n /usr/local/sbin/yagpdb-deploy rollback
+    exec sudo -n /usr/local/sbin/steward-deploy rollback
     ;;
   status)
     [ "$#" -eq 1 ] || { echo 'invalid status command' >&2; exit 126; }
-    exec sudo -n /usr/local/sbin/yagpdb-deploy status
+    exec sudo -n /usr/local/sbin/steward-deploy status
     ;;
   *)
     echo 'command not allowed' >&2

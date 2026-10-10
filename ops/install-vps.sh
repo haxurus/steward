@@ -1,5 +1,5 @@
 #!/bin/sh
-# One-time (and idempotent) installation of the YAGPDB production infrastructure on
+# One-time (and idempotent) installation of the Steward production infrastructure on
 # VPS01. Run from a checkout of this repository: sudo ./ops/install-vps.sh KEY.pub
 # See docs/DEPLOYMENT.md, section 2.
 set -eu
@@ -7,15 +7,15 @@ set -eu
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 REPO_DIR=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
-STATE_DIR=/srv/docker/yagpdb
+STATE_DIR=/srv/docker/steward
 APP_SECRETS="$STATE_DIR/secrets/app"
-DEPLOY_USER=yagpdb-deploy
-# uid/gid of the yagpdb user inside the image (deploy/Dockerfile).
+DEPLOY_USER=steward-deploy
+# uid/gid of the steward user inside the image (deploy/Dockerfile).
 APP_GID=10001
 KEY_FILE=${1:-}
 
-log() { printf '[yagpdb-install] %s\n' "$*"; }
-die() { printf '[yagpdb-install] ERROR: %s\n' "$*" >&2; exit 1; }
+log() { printf '[steward-install] %s\n' "$*"; }
+die() { printf '[steward-install] ERROR: %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die 'run with sudo/root'
 command -v docker >/dev/null 2>&1 || die 'Docker is required'
@@ -42,21 +42,21 @@ if [ -n "$KEY_FILE" ]; then
 fi
 
 if ! id "$DEPLOY_USER" >/dev/null 2>&1; then
-  useradd --system --create-home --home-dir /var/lib/yagpdb-deploy --shell /bin/sh "$DEPLOY_USER"
+  useradd --system --create-home --home-dir /var/lib/steward-deploy --shell /bin/sh "$DEPLOY_USER"
 fi
 
 install -d -o root -g root -m 700 "$STATE_DIR" "$STATE_DIR/secrets" "$STATE_DIR/backups" "$STATE_DIR/logs"
 install -d -o root -g root -m 755 "$STATE_DIR/runtime"
 install -d -o root -g "$APP_GID" -m 750 "$APP_SECRETS"
 
-install -o root -g root -m 755 "$REPO_DIR/ops/yagpdb-deploy" /usr/local/sbin/yagpdb-deploy
+install -o root -g root -m 755 "$REPO_DIR/ops/steward-deploy" /usr/local/sbin/steward-deploy
 install -d -o root -g root -m 755 /usr/local/libexec
-install -o root -g root -m 755 "$REPO_DIR/ops/yagpdb-deploy-entrypoint" /usr/local/libexec/yagpdb-deploy-entrypoint
-install -o root -g root -m 755 "$REPO_DIR/security/host-firewall.sh" /usr/local/sbin/yagpdb-egress-firewall.sh
+install -o root -g root -m 755 "$REPO_DIR/ops/steward-deploy-entrypoint" /usr/local/libexec/steward-deploy-entrypoint
+install -o root -g root -m 755 "$REPO_DIR/security/host-firewall.sh" /usr/local/sbin/steward-egress-firewall.sh
 
-if [ ! -f "$STATE_DIR/yagpdb.env" ]; then
-  install -o root -g root -m 600 "$REPO_DIR/deploy/yagpdb.env.example" "$STATE_DIR/yagpdb.env"
-  log "created $STATE_DIR/yagpdb.env from template"
+if [ ! -f "$STATE_DIR/steward.env" ]; then
+  install -o root -g root -m 600 "$REPO_DIR/deploy/steward.env.example" "$STATE_DIR/steward.env"
+  log "created $STATE_DIR/steward.env from template"
 fi
 
 umask 077
@@ -90,7 +90,7 @@ chmod 755 "$home"
 install -d -o root -g root -m 755 "$home/.ssh"
 if [ -n "$deploy_key" ]; then
   tmp_keys="$home/.ssh/authorized_keys.tmp.$$"
-  printf 'restrict,command="/usr/local/libexec/yagpdb-deploy-entrypoint" %s\n' "$deploy_key" > "$tmp_keys"
+  printf 'restrict,command="/usr/local/libexec/steward-deploy-entrypoint" %s\n' "$deploy_key" > "$tmp_keys"
   chmod 644 "$tmp_keys"
   mv -f "$tmp_keys" "$home/.ssh/authorized_keys"
 elif [ ! -s "$home/.ssh/authorized_keys" ]; then
@@ -100,22 +100,22 @@ else
   chmod 644 "$home/.ssh/authorized_keys"
 fi
 
-cat > /etc/sudoers.d/yagpdb-deploy <<'SUDOEOF'
-Defaults:yagpdb-deploy !setenv
-yagpdb-deploy ALL=(root) NOPASSWD: /usr/local/sbin/yagpdb-deploy *
+cat > /etc/sudoers.d/steward-deploy <<'SUDOEOF'
+Defaults:steward-deploy !setenv
+steward-deploy ALL=(root) NOPASSWD: /usr/local/sbin/steward-deploy *
 SUDOEOF
-chmod 440 /etc/sudoers.d/yagpdb-deploy
-visudo -cf /etc/sudoers.d/yagpdb-deploy >/dev/null
+chmod 440 /etc/sudoers.d/steward-deploy
+visudo -cf /etc/sudoers.d/steward-deploy >/dev/null
 
-cat > /etc/systemd/system/yagpdb-firewall.service <<'UNITEOF'
+cat > /etc/systemd/system/steward-firewall.service <<'UNITEOF'
 [Unit]
-Description=YAGPDB Docker egress firewall
+Description=Steward Docker egress firewall
 Requires=docker.service
 After=docker.service docker-firewall.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/yagpdb-egress-firewall.sh
+ExecStart=/usr/local/sbin/steward-egress-firewall.sh
 RemainAfterExit=yes
 
 [Install]
@@ -123,10 +123,10 @@ WantedBy=multi-user.target
 UNITEOF
 
 systemctl daemon-reload
-systemctl enable yagpdb-firewall.service >/dev/null
-systemctl restart yagpdb-firewall.service
+systemctl enable steward-firewall.service >/dev/null
+systemctl restart steward-firewall.service
 
 log 'installation complete'
-log "edit $STATE_DIR/yagpdb.env (sudoedit)"
+log "edit $STATE_DIR/steward.env (sudoedit)"
 log "fill $APP_SECRETS/YAGPDB_BOTTOKEN and YAGPDB_CLIENTSECRET (sudoedit)"
-log 'configure Nginx Proxy Manager to forward yagpdb.haxurus.com to yagpdb-edge:8080'
+log 'configure Nginx Proxy Manager to forward steward.haxurus.com to steward-edge:8080'

@@ -4,7 +4,7 @@
 .github
 .vscode
 **/*.env
-!deploy/yagpdb.env.example
+!deploy/steward.env.example
 **/secrets
 **/backups
 **/*.log
@@ -12,5 +12,5 @@
 **/soundboard/queue
 **/soundboard/ready
 **/safebrowsing_db
-yagpdb_deploy
-yagpdb_deploy.pub
+steward_deploy
+steward_deploy.pub
