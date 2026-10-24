@@ -152,7 +152,7 @@ func (p *Plugin) StopBot(wg *sync.WaitGroup) {
 var helpFormatter = &dcmd.StdHelpFormatter{SlashCommandID: SlashCommandIDForName}
 
 func YAGCommandMiddleware(inner dcmd.RunFunc) dcmd.RunFunc {
-	return func(data *dcmd.Data) (interface{}, error) {
+	return func(data *dcmd.Data) (any, error) {
 		yc, ok := data.Cmd.Command.(*YAGCommand)
 		if !ok {
 			resp, err := inner(data)
@@ -280,7 +280,7 @@ func YAGCommandMiddleware(inner dcmd.RunFunc) dcmd.RunFunc {
 	}
 }
 
-func FilterResp(in interface{}, guildID int64) interface{} {
+func FilterResp(in any, guildID int64) any {
 	switch t := in.(type) {
 	case string:
 		return FilterBadInvites(t, guildID, "[removed-invite]")
@@ -342,7 +342,7 @@ func handleMsgCreate(evt *eventsystem.EventData) {
 	}
 
 	prefix := ""
-	if !CommandSystem.DisablePrefixTrigger {
+	if !CommandSystem.DisablePrefixTrigger || common.ShowPrefixCommandsWarning() {
 		prefix = prfx.DefaultCommandPrefix()
 		if evt.GS != nil && evt.HasFeatureFlag(featureFlagHasCustomPrefix) {
 			var err error
@@ -353,8 +353,13 @@ func handleMsgCreate(evt *eventsystem.EventData) {
 		}
 	}
 
+	// FindPrefix checks DisablePrefixTrigger before the prefix, so passing one
+	// here still runs nothing.
 	CommandSystem.CheckMessageWtihPrefetchedPrefix(common.BotSession, evt.MessageCreate(), prefix)
-	// CommandSystem.HandleMessageCreate(common.BotSession, evt.MessageCreate())
+
+	if CommandSystem.DisablePrefixTrigger {
+		alertPrefixCommandDisabled(evt, m.Message, prefix)
+	}
 }
 
 func GetCommandPrefixBotEvt(evt *eventsystem.EventData) (string, error) {
@@ -420,7 +425,7 @@ var cmdPrefix = &YAGCommand{
 		{Name: "Server-ID", Type: dcmd.BigInt, Default: 0},
 	},
 
-	RunFunc: func(data *dcmd.Data) (interface{}, error) {
+	RunFunc: func(data *dcmd.Data) (any, error) {
 		targetGuildID := data.Args[0].Int64()
 		if targetGuildID == 0 {
 			targetGuildID = data.GuildData.GS.ID

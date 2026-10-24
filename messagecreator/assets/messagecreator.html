@@ -96,6 +96,7 @@
 
 <div class="page-header">
     <h2>Message Creator</h2>
+    {{template "cp_docs_link" "tools-and-utilities/message-creator"}}
 </div>
 
 {{template "cp_alerts" .}}
@@ -185,6 +186,13 @@
                                     trigger a <em>Message Component</em> type custom command.
                                 </small>
                                 <div id="components-error" class="text-danger small mt-1"></div>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="d-block text-muted small text-uppercase font-weight-bold mc-section-label">Mentions</label>
+                                <small class="form-text text-muted mb-2">User mentions are always allowed.</small>
+                                {{checkbox "allow_role_mentions" "mc-allow-role-mentions" "Allow role mentions" false}}
+                                {{checkbox "allow_everyone_mentions" "mc-allow-everyone-mentions" "Allow <code>@everyone</code> and <code>@here</code> mentions" false}}
                             </div>
 
                             <div id="mc-errors" class="alert alert-danger mt-3" style="display:none;"></div>
