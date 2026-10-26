@@ -2,6 +2,7 @@
 package custom
 
 import (
+	"github.com/botlabs-gg/yagpdb/v2/custom/levels"
 	"github.com/botlabs-gg/yagpdb/v2/custom/logretention"
 	"github.com/botlabs-gg/yagpdb/v2/custom/tempvoice"
 )
@@ -12,4 +13,5 @@ import (
 func RegisterPlugins() {
 	logretention.RegisterPlugin()
 	tempvoice.RegisterPlugin()
+	levels.RegisterPlugin()
 }

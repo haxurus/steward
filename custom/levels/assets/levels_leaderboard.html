@@ -1,0 +1,51 @@
+{{define "cp_custom_levels_leaderboard"}}
+{{template "cp_head" .}}
+
+<header class="page-header">
+    <h2>Classifica livelli · {{.ActiveGuild.Name}}</h2>
+</header>
+
+{{template "cp_alerts" .}}
+
+<div class="row">
+    <div class="col-lg-12">
+        <div class="card">
+            <div class="card-body">
+                {{if not (and .Levels.Enabled .Levels.PublicLeaderboard)}}
+                <p>La classifica di questo server non è pubblica.</p>
+                {{else if not .LeaderboardRows}}
+                <p>Nessuno ha ancora guadagnato esperienza.</p>
+                {{else}}
+                <table class="table table-responsive-md table-striped mb-0">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Membro</th>
+                            <th>Livello</th>
+                            <th>XP</th>
+                            <th>Voce</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .LeaderboardRows}}
+                        <tr>
+                            <td>{{.Position}}</td>
+                            <td>
+                                {{if .Avatar}}<img src="{{.Avatar}}" alt="" width="28" height="28" class="rounded-circle mr-2">{{end}}
+                                {{if .Username}}{{.Username}}{{else}}{{.UserID}}{{end}}
+                            </td>
+                            <td><b>{{.Level}}</b></td>
+                            <td>{{.XP}}</td>
+                            <td>{{.VoiceMinutes}} min</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+                {{end}}
+            </div>
+        </div>
+    </div>
+</div>
+
+{{template "cp_footer" .}}
+{{end}}
