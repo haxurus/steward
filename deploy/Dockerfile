@@ -5,7 +5,10 @@
 # left untouched. Build from the repository root:
 #   docker build -f deploy/Dockerfile --build-arg STEWARD_VERSION=$(git describe --tags) .
 
-FROM golang:1.26-alpine3.24 AS build
+FROM golang:1.27-alpine3.24 AS build
+# If upstream raises the "go" line in go.mod beyond this image, download that
+# toolchain instead of failing (the image default is GOTOOLCHAIN=local).
+ENV GOTOOLCHAIN=auto
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
