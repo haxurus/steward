@@ -1,0 +1,255 @@
+{{define "cp_custom_levels"}}
+{{template "cp_head" .}}
+
+<header class="page-header">
+    <h2>Livelli</h2>
+</header>
+
+{{template "cp_alerts" .}}
+
+{{$levels := .Levels}}
+<form method="post" action="/manage/{{.ActiveGuild.ID}}/levels" data-async-form>
+    <div class="row">
+        <div class="col-lg-12">
+            <div class="card {{if $levels.Enabled}}card-featured card-featured-success{{end}}">
+                <header class="card-header">
+                    {{checkbox "Enabled" "levels-enabled" `<h2 class="card-title">Sistema di livelli attivo</h2>` $levels.Enabled}}
+                </header>
+                <div class="card-body">
+                    <p>I membri guadagnano esperienza (XP) scrivendo, reagendo ai messaggi e stando nei canali vocali.
+                        Comandi: <code>/livello</code>, <code>/classifica</code> e, per chi ha <i>Gestisci server</i>,
+                        <code>/xp aggiungi|togli|imposta|azzera</code>.</p>
+                    {{checkbox "PublicLeaderboard" "levels-public" `Classifica pubblica sul sito` $levels.PublicLeaderboard}}
+                    {{if $levels.PublicLeaderboard}}
+                    <p class="mt-2"><a href="/public/{{.ActiveGuild.ID}}/levels" target="_blank">Apri la classifica pubblica</a></p>
+                    {{end}}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-6">
+            <div class="card">
+                <header class="card-header"><h2 class="card-title">💬 Messaggi</h2></header>
+                <div class="card-body">
+                    <div class="form-row">
+                        <div class="form-group col">
+                            <label>XP minimo per messaggio</label>
+                            <input type="number" min="0" max="1000" class="form-control" name="MessageXPMin" value="{{$levels.MessageXPMin}}">
+                        </div>
+                        <div class="form-group col">
+                            <label>XP massimo per messaggio</label>
+                            <input type="number" min="0" max="1000" class="form-control" name="MessageXPMax" value="{{$levels.MessageXPMax}}">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Attesa tra due messaggi premiati (secondi)</label>
+                        <input type="number" min="0" max="86400" class="form-control" name="MessageCooldown" value="{{$levels.MessageCooldown}}">
+                        <small class="form-text text-muted">I messaggi scritti durante l'attesa non danno XP: scoraggia lo spam.</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Lunghezza minima del messaggio (caratteri)</label>
+                        <input type="number" min="0" max="2000" class="form-control" name="MessageMinLength" value="{{$levels.MessageMinLength}}">
+                    </div>
+                    <div class="form-group">
+                        <label>Massimo XP al giorno dai messaggi (0 = nessun limite)</label>
+                        <input type="number" min="0" class="form-control" name="MessageDailyCap" value="{{$levels.MessageDailyCap}}">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card">
+                <header class="card-header"><h2 class="card-title">😀 Reazioni</h2></header>
+                <div class="card-body">
+                    <div class="form-row">
+                        <div class="form-group col">
+                            <label>XP a chi reagisce</label>
+                            <input type="number" min="0" max="1000" class="form-control" name="ReactionXP" value="{{$levels.ReactionXP}}">
+                        </div>
+                        <div class="form-group col">
+                            <label>XP all'autore del messaggio</label>
+                            <input type="number" min="0" max="1000" class="form-control" name="ReactionReceivedXP" value="{{$levels.ReactionReceivedXP}}">
+                        </div>
+                    </div>
+                    <small class="form-text text-muted mb-3">Al massimo una volta per membro e messaggio; mai per le reazioni ai propri messaggi.
+                        L'autore riceve XP solo per messaggi delle ultime 24 ore.</small>
+                    <div class="form-group">
+                        <label>Attesa tra due reazioni premiate (secondi)</label>
+                        <input type="number" min="0" max="86400" class="form-control" name="ReactionCooldown" value="{{$levels.ReactionCooldown}}">
+                    </div>
+                    <div class="form-group">
+                        <label>Massimo XP al giorno dalle reazioni (0 = nessun limite)</label>
+                        <input type="number" min="0" class="form-control" name="ReactionDailyCap" value="{{$levels.ReactionDailyCap}}">
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-6">
+            <div class="card">
+                <header class="card-header"><h2 class="card-title">🎙️ Canali vocali</h2></header>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label>XP per ogni minuto in vocale</label>
+                        <input type="number" min="0" max="1000" class="form-control" name="VoiceXPPerMinute" value="{{$levels.VoiceXPPerMinute}}">
+                        <small class="form-text text-muted">Mai nel canale AFK del server.</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Altri membri (non bot) richiesti nel canale</label>
+                        <input type="number" min="0" max="99" class="form-control" name="VoiceMinMembers" value="{{$levels.VoiceMinMembers}}">
+                        <small class="form-text text-muted">Con 1, chi resta da solo in un canale non guadagna nulla.</small>
+                    </div>
+                    {{checkbox "VoiceIgnoreMuted" "levels-voice-muted" `Niente XP a chi ha il microfono disattivato (da sé o dallo staff)` $levels.VoiceIgnoreMuted}}
+                    {{checkbox "VoiceIgnoreDeaf" "levels-voice-deaf" `Niente XP a chi ha l'audio disattivato (da sé o dallo staff)` $levels.VoiceIgnoreDeaf}}
+                    <div class="form-group mt-3">
+                        <label>Anti-AFK: richiedi un messaggio o una reazione negli ultimi N minuti (0 = disattivato)</label>
+                        <input type="number" min="0" max="1440" class="form-control" name="VoiceActivityWindow" value="{{$levels.VoiceActivityWindow}}">
+                        <small class="form-text text-muted">Chi resta in vocale senza mai interagire smette di guadagnare XP dopo questo tempo.</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Massimo XP al giorno dalla voce (0 = nessun limite)</label>
+                        <input type="number" min="0" class="form-control" name="VoiceDailyCap" value="{{$levels.VoiceDailyCap}}">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card">
+                <header class="card-header"><h2 class="card-title">🚫 Esclusioni</h2></header>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label>Canali senza XP (testo e voce, incluse le loro discussioni)</label>
+                        <select name="IgnoredChannels" class="multiselect form-control" multiple="multiple" data-plugin-multiselect>
+                            {{textChannelOptionsMulti .ActiveGuild.Channels $levels.IgnoredChannels}}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Ruoli che non guadagnano XP</label>
+                        <select name="IgnoredRoles" class="multiselect form-control" multiple="multiple" data-plugin-multiselect>
+                            {{roleOptionsMulti .ActiveGuild.Roles nil $levels.IgnoredRoles}}
+                        </select>
+                    </div>
+                    <small class="form-text text-muted">I limiti giornalieri si azzerano a mezzanotte (ora italiana).</small>
+                </div>
+            </div>
+
+            <div class="card">
+                <header class="card-header"><h2 class="card-title">📈 Curva dei livelli</h2></header>
+                <div class="card-body">
+                    <div class="form-row">
+                        <div class="form-group col">
+                            <label>XP per il livello 1</label>
+                            <input type="number" min="1" class="form-control" name="LevelBase" value="{{$levels.LevelBase}}">
+                        </div>
+                        <div class="form-group col">
+                            <label>XP in più per ogni livello</label>
+                            <input type="number" min="0" class="form-control" name="LevelStep" value="{{$levels.LevelStep}}">
+                        </div>
+                    </div>
+                    <small class="form-text text-muted">Ogni livello richiede l'XP del precedente più l'incremento.
+                        Con i valori attuali: livello 5 a <b>{{$levels.XPForLevel 5}}</b> XP, livello 10 a <b>{{$levels.XPForLevel 10}}</b>,
+                        livello 25 a <b>{{$levels.XPForLevel 25}}</b>, livello 50 a <b>{{$levels.XPForLevel 50}}</b>.</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-6">
+            <div class="card">
+                <header class="card-header"><h2 class="card-title">🎁 Ruoli premio</h2></header>
+                <div class="card-body">
+                    <p>Ruoli assegnati al raggiungimento di un livello. Il ruolo del bot deve stare sopra di loro.</p>
+                    <div id="levels-rewards">
+                        {{range $i, $r := $levels.Rewards}}
+                        <div class="form-row reward-row">
+                            <div class="form-group col-4">
+                                <input type="number" min="1" max="1000" class="form-control" name="Rewards.{{$i}}.Level" value="{{$r.Level}}" placeholder="Livello">
+                            </div>
+                            <div class="form-group col">
+                                <select class="form-control" name="Rewards.{{$i}}.Role">
+                                    {{roleOptions $.ActiveGuild.Roles $.HighestRole $r.Role "Nessuno"}}
+                                </select>
+                            </div>
+                            <div class="form-group col-auto">
+                                <button type="button" class="btn btn-danger reward-remove"><i class="fas fa-times"></i></button>
+                            </div>
+                        </div>
+                        {{end}}
+                    </div>
+                    <button type="button" class="btn btn-primary" id="reward-add"><i class="fas fa-plus"></i> Aggiungi ruolo premio</button>
+                    <div class="mt-3">
+                        {{checkbox "StackRewards" "levels-stack" `Mantieni i ruoli dei livelli precedenti (altrimenti resta solo l'ultimo)` $levels.StackRewards}}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card">
+                <header class="card-header">
+                    {{checkbox "AnnounceEnabled" "levels-announce" `<h2 class="card-title">📣 Annuncia i passaggi di livello</h2>` $levels.AnnounceEnabled}}
+                </header>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label>Canale degli annunci</label>
+                        <select name="AnnounceChannel" class="form-control">
+                            {{textOnlyChannelOptions .ActiveGuild.Channels $levels.AnnounceChannel true "Lo stesso del messaggio"}}
+                        </select>
+                        <small class="form-text text-muted">Con "Lo stesso del messaggio" i passaggi di livello ottenuti in vocale o con le reazioni non vengono annunciati.</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Messaggio</label>
+                        <input type="text" class="form-control" name="AnnounceMessage" maxlength="500" value="{{$levels.AnnounceMessage}}">
+                        <small class="form-text text-muted"><code>{user}</code> menziona il membro, <code>{level}</code> è il nuovo livello, <code>{xp}</code> l'esperienza totale.</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-12">
+            <button type="submit" class="btn btn-success btn-lg btn-block">Salva</button>
+        </div>
+    </div>
+</form>
+
+<template id="reward-row-template">
+    <div class="form-row reward-row">
+        <div class="form-group col-4">
+            <input type="number" min="1" max="1000" class="form-control" name="Rewards.__INDEX__.Level" placeholder="Livello">
+        </div>
+        <div class="form-group col">
+            <select class="form-control" name="Rewards.__INDEX__.Role">
+                {{roleOptions .ActiveGuild.Roles .HighestRole 0 "Nessuno"}}
+            </select>
+        </div>
+        <div class="form-group col-auto">
+            <button type="button" class="btn btn-danger reward-remove"><i class="fas fa-times"></i></button>
+        </div>
+    </div>
+</template>
+
+<script>
+    (function () {
+        // Indexes only need to be unique: empty and missing rows are dropped on save.
+        var nextIndex = {{len $levels.Rewards}} + 1000;
+        $(document).on("click", "#reward-add", function () {
+            var html = document.getElementById("reward-row-template").innerHTML.replace(/__INDEX__/g, nextIndex++);
+            $("#levels-rewards").append(html);
+        });
+        $(document).on("click", ".reward-remove", function () {
+            $(this).closest(".reward-row").remove();
+        });
+    })();
+</script>
+
+{{template "cp_footer" .}}
+{{end}}
