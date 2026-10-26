@@ -48,8 +48,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # Latest 1.26 patch release (go.mod pins only the minimum, 1.26.0).
-          go-version: "1.26"
+          # Latest patch of the Go release upstream builds with (go.mod "go" line).
+          go-version: "1.27"
           check-latest: true
 
       - name: Select packages to test
@@ -125,8 +125,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # Latest 1.26 patch release (go.mod pins only the minimum, 1.26.0).
-          go-version: "1.26"
+          # Latest patch of the Go release upstream builds with (go.mod "go" line).
+          go-version: "1.27"
           check-latest: true
 
       - name: Build every package
@@ -240,8 +240,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # Latest 1.26 patch release (go.mod pins only the minimum, 1.26.0).
-          go-version: "1.26"
+          # Latest patch of the Go release upstream builds with (go.mod "go" line).
+          go-version: "1.27"
           check-latest: true
 
       - name: Install ffmpeg
@@ -274,8 +274,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # Latest 1.26 patch release (go.mod pins only the minimum, 1.26.0).
-          go-version: "1.26"
+          # Latest patch of the Go release upstream builds with (go.mod "go" line).
+          go-version: "1.27"
           check-latest: true
 
       - name: govulncheck (report only)
