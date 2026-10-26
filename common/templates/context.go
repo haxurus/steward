@@ -216,6 +216,8 @@ func init() {
 	msgpack.RegisterExt(1, (*SDict)(nil))
 	msgpack.RegisterExt(2, (*Dict)(nil))
 	msgpack.RegisterExt(3, (*Slice)(nil))
+	msgpack.RegisterExt(4, (*ComponentBuilder)(nil))
+	msgpack.RegisterExt(5, (*storedComponent)(nil))
 }
 
 // set by the premium package to return wether this guild is premium or not
@@ -242,8 +244,8 @@ type Context struct {
 	BotUser *discordgo.User
 
 	DisabledContextFuncs []string
-	ContextFuncs         map[string]interface{}
-	Data                 map[string]interface{}
+	ContextFuncs         map[string]any
+	Data                 map[string]any
 	Counters             map[string]int
 
 	FixedOutput  string
@@ -315,8 +317,8 @@ func NewContext(gs *dstate.GuildSet, cs *dstate.ChannelState, ms *dstate.MemberS
 
 		BotUser: common.BotUser,
 
-		ContextFuncs: make(map[string]interface{}),
-		Data:         make(map[string]interface{}),
+		ContextFuncs: make(map[string]any),
+		Data:         make(map[string]any),
 		Counters:     make(map[string]int),
 
 		CurrentFrame: &ContextFrame{
@@ -421,6 +423,14 @@ const (
 	MaxOpsEvalNormal  = 200000
 	MaxOpsEvalPremium = 500000
 	MaxSliceLength    = 10000
+
+	MaxAllocNormal      = 200 << 20
+	MaxAllocPremium     = 500 << 20
+	MaxAllocEvalNormal  = 40 << 20
+	MaxAllocEvalPremium = 100 << 20
+
+	// Runs allocating more than this are logged so the caps above can be tightened from real usage.
+	LogAllocAbove = 25 << 20
 )
 
 func (c *Context) Execute(source string) (string, error) {
@@ -486,14 +496,14 @@ func (c *Context) executeParsed() (string, error) {
 	parsed := c.CurrentFrame.parsedTemplate
 
 	if c.IsPremium {
-		parsed = parsed.MaxOps(MaxOpsPremium)
+		parsed = parsed.MaxOps(MaxOpsPremium).MaxAllocBytes(MaxAllocPremium)
 		if c.ExecutedFrom == ExecutedFromEvalCC {
-			parsed = parsed.MaxOps(MaxOpsEvalPremium)
+			parsed = parsed.MaxOps(MaxOpsEvalPremium).MaxAllocBytes(MaxAllocEvalPremium)
 		}
 	} else {
-		parsed = parsed.MaxOps(MaxOpsNormal)
+		parsed = parsed.MaxOps(MaxOpsNormal).MaxAllocBytes(MaxAllocNormal)
 		if c.ExecutedFrom == ExecutedFromEvalCC {
-			parsed = parsed.MaxOps(MaxOpsEvalNormal)
+			parsed = parsed.MaxOps(MaxOpsEvalNormal).MaxAllocBytes(MaxAllocEvalNormal)
 		}
 	}
 
@@ -529,7 +539,16 @@ func (c *Context) executeParsed() (string, error) {
 		}
 	}()
 
-	err = parsed.Execute(w, c.Data)
+	allocated, err := parsed.ExecuteCountingAlloc(w, c.Data)
+	if allocated > LogAllocAbove {
+		logger.WithFields(logrus.Fields{
+			"guild_id":      c.GS.ID,
+			"executed_from": c.ExecutedFrom,
+			"cc_id":         c.Data["CCID"],
+			"allocated_mb":  allocated >> 20,
+			"success":       err == nil,
+		}).Warn("Template allocated a lot of memory")
+	}
 
 	if c.FixedOutput != "" {
 		return c.FixedOutput, nil
@@ -796,7 +815,7 @@ func (c *Context) LogEntry() *logrus.Entry {
 	return f
 }
 
-func (c *Context) addContextFunc(name string, f interface{}) {
+func (c *Context) addContextFunc(name string, f any) {
 	if !slices.Contains(c.DisabledContextFuncs, name) {
 		c.ContextFuncs[name] = f
 	}
@@ -1038,7 +1057,7 @@ func MaybeScheduledDeleteMessage(guildID, channelID, messageID int64, delaySecon
 	}
 }
 
-func isContainer(v interface{}) bool {
+func isContainer(v any) bool {
 	rv, _ := indirect(reflect.ValueOf(v))
 	switch rv.Kind() {
 	case reflect.Array, reflect.Slice, reflect.Map:
@@ -1053,7 +1072,7 @@ const startDetectingCyclesAfter = 250
 
 type cyclicValueDetector struct {
 	ptrLevel uint
-	ptrSeen  map[interface{}]struct{}
+	ptrSeen  map[any]struct{}
 }
 
 func (c *cyclicValueDetector) Check(v reflect.Value) error {
@@ -1101,14 +1120,14 @@ func (c *cyclicValueDetector) Check(v reflect.Value) error {
 	}
 }
 
-func detectCyclicValue(v interface{}) error {
-	c := &cyclicValueDetector{ptrSeen: make(map[interface{}]struct{})}
+func detectCyclicValue(v any) error {
+	c := &cyclicValueDetector{ptrSeen: make(map[any]struct{})}
 	return c.Check(reflect.ValueOf(v))
 }
 
-type Dict map[interface{}]interface{}
+type Dict map[any]any
 
-func (d Dict) Set(key interface{}, value interface{}) (string, error) {
+func (d Dict) Set(key any, value any) (string, error) {
 	if key == nil {
 		return "", errors.New("key cannot be nil")
 	}
@@ -1121,7 +1140,7 @@ func (d Dict) Set(key interface{}, value interface{}) (string, error) {
 	return "", nil
 }
 
-func (d Dict) Get(key interface{}) interface{} {
+func (d Dict) Get(key any) any {
 	out, ok := d[key]
 	if !ok {
 		switch key.(type) {
@@ -1134,18 +1153,18 @@ func (d Dict) Get(key interface{}) interface{} {
 	return out
 }
 
-func (d Dict) Del(key interface{}) string {
+func (d Dict) Del(key any) string {
 	delete(d, key)
 	return ""
 }
 
-func (d Dict) HasKey(k interface{}) (ok bool) {
+func (d Dict) HasKey(k any) (ok bool) {
 	_, ok = d[k]
 	return
 }
 
 func (d Dict) MarshalJSON() ([]byte, error) {
-	md := make(map[string]interface{})
+	md := make(map[string]any)
 
 	for k, v := range d {
 		if k == nil {
@@ -1168,7 +1187,7 @@ func (d Dict) MarshalJSON() ([]byte, error) {
 
 type SDict map[string]any
 
-func (d SDict) Set(key string, value interface{}) (string, error) {
+func (d SDict) Set(key string, value any) (string, error) {
 	d[key] = value
 	if isContainer(value) {
 		if err := detectCyclicValue(d); err != nil {
@@ -1178,7 +1197,7 @@ func (d SDict) Set(key string, value interface{}) (string, error) {
 	return "", nil
 }
 
-func (d SDict) Get(key string) interface{} {
+func (d SDict) Get(key string) any {
 	return d[key]
 }
 
@@ -1192,16 +1211,16 @@ func (d SDict) HasKey(k string) (ok bool) {
 	return
 }
 
-type Slice []interface{}
+type Slice []any
 
-func (s Slice) Append(item interface{}) (interface{}, error) {
+func (s Slice) Append(item any) (any, error) {
 	if len(s)+1 > MaxSliceLength {
 		return nil, errors.New("resulting slice exceeds slice size limit")
 	}
 
 	var result reflect.Value
 	if item == nil {
-		result = reflect.Append(reflect.ValueOf(&s).Elem(), reflect.Zero(reflect.TypeOf((*interface{})(nil)).Elem()))
+		result = reflect.Append(reflect.ValueOf(&s).Elem(), reflect.Zero(reflect.TypeFor[any]()))
 	} else {
 		result = reflect.Append(reflect.ValueOf(&s).Elem(), reflect.ValueOf(item))
 	}
@@ -1214,7 +1233,7 @@ func (s Slice) Append(item interface{}) (interface{}, error) {
 	return result.Interface(), nil
 }
 
-func (s Slice) Set(index int, item interface{}) (string, error) {
+func (s Slice) Set(index int, item any) (string, error) {
 	if index >= len(s) {
 		return "", errors.New("Index out of bounds")
 	}
@@ -1228,7 +1247,7 @@ func (s Slice) Set(index int, item interface{}) (string, error) {
 	return "", nil
 }
 
-func (s Slice) AppendSlice(slice interface{}) (interface{}, error) {
+func (s Slice) AppendSlice(slice any) (any, error) {
 	val, _ := indirect(reflect.ValueOf(slice))
 	switch val.Kind() {
 	case reflect.Slice, reflect.Array:
@@ -1246,7 +1265,7 @@ func (s Slice) AppendSlice(slice interface{}) (interface{}, error) {
 	for i := 0; i < val.Len(); i++ {
 		elem := val.Index(i).Interface()
 		if elem == nil {
-			result = reflect.Append(result, reflect.Zero(reflect.TypeOf((*interface{})(nil)).Elem()))
+			result = reflect.Append(result, reflect.Zero(reflect.TypeFor[any]()))
 		} else {
 			result = reflect.Append(result, reflect.ValueOf(elem))
 			if !containsContainer && isContainer(elem) {
@@ -1262,7 +1281,7 @@ func (s Slice) AppendSlice(slice interface{}) (interface{}, error) {
 	return result.Interface(), nil
 }
 
-func (s Slice) StringSlice(flag ...bool) interface{} {
+func (s Slice) StringSlice(flag ...bool) any {
 	strict := false
 	if len(flag) > 0 {
 		strict = flag[0]
@@ -1379,7 +1398,7 @@ type ComponentBuilder struct {
 	Values     []any
 }
 
-func (s *ComponentBuilder) Add(key string, value any) (interface{}, error) {
+func (s *ComponentBuilder) Add(key string, value any) (any, error) {
 	if len(s.Components)+1 > MaxSliceLength {
 		return nil, errors.New("resulting slice exceeds slice size limit")
 	}
@@ -1395,7 +1414,7 @@ func (s *ComponentBuilder) Add(key string, value any) (interface{}, error) {
 	return "", nil
 }
 
-func (s *ComponentBuilder) AddSlice(key string, slice interface{}) (interface{}, error) {
+func (s *ComponentBuilder) AddSlice(key string, slice any) (any, error) {
 	val, _ := indirect(reflect.ValueOf(slice))
 	switch val.Kind() {
 	case reflect.Slice, reflect.Array:
@@ -1415,7 +1434,7 @@ func (s *ComponentBuilder) AddSlice(key string, slice interface{}) (interface{},
 		s.Components = append(s.Components, key)
 		elem := val.Index(i).Interface()
 		if elem == nil {
-			result = reflect.Append(result, reflect.Zero(reflect.TypeOf((*interface{})(nil)).Elem()))
+			result = reflect.Append(result, reflect.Zero(reflect.TypeFor[any]()))
 		} else {
 			result = reflect.Append(result, reflect.ValueOf(elem))
 			if !containsContainer && isContainer(elem) {
@@ -1423,7 +1442,7 @@ func (s *ComponentBuilder) AddSlice(key string, slice interface{}) (interface{},
 			}
 		}
 	}
-	s.Values = result.Interface().([]interface{})
+	s.Values = result.Interface().([]any)
 
 	if containsContainer {
 		if err := detectCyclicValue(s.Values); err != nil {
@@ -1434,7 +1453,7 @@ func (s *ComponentBuilder) AddSlice(key string, slice interface{}) (interface{},
 	return "", nil
 }
 
-func (s *ComponentBuilder) Merge(toMerge *ComponentBuilder) (interface{}, error) {
+func (s *ComponentBuilder) Merge(toMerge *ComponentBuilder) (any, error) {
 	if len(s.Components)+len(toMerge.Components) > MaxSliceLength {
 		return nil, errors.New("resulting slice exceeds slice size limit")
 	}
@@ -1455,7 +1474,7 @@ func (s *ComponentBuilder) Merge(toMerge *ComponentBuilder) (interface{}, error)
 	return "", nil
 }
 
-func (s *ComponentBuilder) Get(key string) (result []interface{}) {
+func (s *ComponentBuilder) Get(key string) (result []any) {
 	for i, k := range s.Components {
 		if k == key {
 			result = append(result, s.Values[i])
@@ -1591,8 +1610,11 @@ func (s *ComponentBuilder) ToComplexMessageEdit() (*discordgo.MessageEdit, error
 	return msg, nil
 }
 
-func withOutputLimit(f func(...interface{}) string, limit int) func(...interface{}) (string, error) {
-	return func(args ...interface{}) (string, error) {
+func withOutputLimit(f func(...any) string, limit int) func(...any) (string, error) {
+	return func(args ...any) (string, error) {
+		if exceedsSerializedSize(sizeModeFormat, limit, args...) {
+			return "", fmt.Errorf("string grew too long (max %d)", limit)
+		}
 		out := f(args...)
 		if len(out) > limit {
 			return "", fmt.Errorf("string grew too long: length %d (max %d)", len(out), limit)
@@ -1601,8 +1623,11 @@ func withOutputLimit(f func(...interface{}) string, limit int) func(...interface
 	}
 }
 
-func withOutputLimitF(f func(string, ...interface{}) string, limit int) func(string, ...interface{}) (string, error) {
-	return func(format string, args ...interface{}) (string, error) {
+func withOutputLimitF(f func(string, ...any) string, limit int) func(string, ...any) (string, error) {
+	return func(format string, args ...any) (string, error) {
+		if exceedsSerializedSize(sizeModeFormat, limit-len(format), args...) {
+			return "", fmt.Errorf("string grew too long (max %d)", limit)
+		}
 		out := f(format, args...)
 		if len(out) > limit {
 			return "", fmt.Errorf("string grew too long: length %d (max %d)", len(out), limit)

@@ -2,9 +2,10 @@ package verification
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,7 +25,6 @@ import (
 	"github.com/botlabs-gg/yagpdb/v2/lib/dstate"
 	"github.com/botlabs-gg/yagpdb/v2/moderation"
 	"github.com/botlabs-gg/yagpdb/v2/verification/models"
-	"github.com/botlabs-gg/yagpdb/v2/web"
 	"github.com/mediocregopher/radix/v3"
 	"github.com/volatiletech/sqlboiler/v4/boil"
 	"github.com/volatiletech/sqlboiler/v4/queries/qm"
@@ -79,10 +79,16 @@ func addMemberToVerificationPendingSet(guildID int64, userID int64) {
 	}
 }
 
+// RandStringRunes returns a random string of letters, from a cryptographically
+// secure source as it is used for verification tokens.
 func RandStringRunes(n int) string {
 	b := make([]rune, n)
 	for i := range b {
-		b[i] = letterRunes[rand.Intn(len(letterRunes))]
+		idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(letterRunes))))
+		if err != nil {
+			panic(err)
+		}
+		b[i] = letterRunes[idx.Int64()]
 	}
 	return string(b)
 }
@@ -172,7 +178,8 @@ func (p *Plugin) handleMemberUpdate(evt *eventsystem.EventData) {
 
 func (p *Plugin) createVerificationSession(userID, guildID int64) (string, error) {
 	for {
-		token := RandStringRunes(32)
+		// 16 letters is about 91 bits, plenty for a link that is only valid until solved.
+		token := RandStringRunes(16)
 		model := &models.VerificationSession{
 			Token:     token,
 			UserID:    userID,
@@ -248,8 +255,8 @@ func (p *Plugin) startVerificationProcess(conf *models.VerificationConfig, guild
 	p.logAction(guildID, conf.LogChannel, target, "New user joined waiting to be verified as a human", 0x47aaed)
 }
 
-func ScheduledEventMW(innerHandler func(ms *dstate.MemberState, guildID int64, conf *models.VerificationConfig, rawData interface{}) (bool, error)) func(evt *seventsmodels.ScheduledEvent, data interface{}) (retry bool, err error) {
-	return func(evt *seventsmodels.ScheduledEvent, data interface{}) (retry bool, err error) {
+func ScheduledEventMW(innerHandler func(ms *dstate.MemberState, guildID int64, conf *models.VerificationConfig, rawData any) (bool, error)) func(evt *seventsmodels.ScheduledEvent, data any) (retry bool, err error) {
+	return func(evt *seventsmodels.ScheduledEvent, data any) (retry bool, err error) {
 
 		userID := int64(0)
 
@@ -281,7 +288,7 @@ func ScheduledEventMW(innerHandler func(ms *dstate.MemberState, guildID int64, c
 
 }
 
-func (p *Plugin) handleUserVerifiedScheduledEvent(ms *dstate.MemberState, guildID int64, conf *models.VerificationConfig, rawData interface{}) (retry bool, err error) {
+func (p *Plugin) handleUserVerifiedScheduledEvent(ms *dstate.MemberState, guildID int64, conf *models.VerificationConfig, rawData any) (retry bool, err error) {
 	err = common.BotSession.GuildMemberRoleAdd(guildID, ms.User.ID, conf.VerifiedRole)
 	if err != nil {
 		return scheduledevents2.CheckDiscordErrRetry(err), err
@@ -429,7 +436,7 @@ func (p *Plugin) CheckBanned(guildID int64, users []*discordgo.User) (*discordgo
 	return nil, nil
 }
 
-func (p *Plugin) handleWarnUserVerification(ms *dstate.MemberState, guildID int64, conf *models.VerificationConfig, rawData interface{}) (retry bool, err error) {
+func (p *Plugin) handleWarnUserVerification(ms *dstate.MemberState, guildID int64, conf *models.VerificationConfig, rawData any) (retry bool, err error) {
 	if p.checkMemberAlreadyVerified(ms, conf) {
 		return false, nil
 	}
@@ -480,7 +487,7 @@ func (p *Plugin) sendVerificationDM(conf *models.VerificationConfig, gs *dstate.
 	newContext := func() *templates.Context {
 		tmplCTX := templates.NewContext(gs, &cs, ms)
 		tmplCTX.Name = name
-		tmplCTX.Data["Link"] = fmt.Sprintf("%s/public/%d/verify/%d/%s", web.BaseURL(), gs.ID, ms.User.ID, token)
+		tmplCTX.Data["Link"] = VerifyPageURL(token)
 		return tmplCTX
 	}
 
@@ -509,7 +516,7 @@ func (p *Plugin) sendVerificationDM(conf *models.VerificationConfig, gs *dstate.
 	}
 }
 
-func (p *Plugin) handleKickUser(ms *dstate.MemberState, guildID int64, conf *models.VerificationConfig, rawData interface{}) (retry bool, err error) {
+func (p *Plugin) handleKickUser(ms *dstate.MemberState, guildID int64, conf *models.VerificationConfig, rawData any) (retry bool, err error) {
 	if p.checkMemberAlreadyVerified(ms, conf) {
 		return false, nil
 	}
