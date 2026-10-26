@@ -7,6 +7,7 @@ Qui vivono le funzioni aggiunte dal fork. Stanno fuori dai package upstream cos�
 | Plugin | Cosa fa | Configurazione |
 |---|---|---|
 | [`logretention`](logretention/logretention.go) | Cancella i message log più vecchi di N giorni, al posto della cancellazione fissa a 30 giorni dell'upstream. Il valore si cambia senza riavvio. | `yagpdb.custom.message_log_retention_days` (default 30, `0` = conserva tutto) da `/admin/config`, oppure `YAGPDB_CUSTOM_MESSAGE_LOG_RETENTION_DAYS` in `steward.env`. Richiede `YAGPDB_ENABLE_MESSAGE_LOG_PURGE=false` (già impostato nel Compose di produzione). |
+| [`tempvoice`](tempvoice/tempvoice.go) | Canali vocali temporanei: chi entra in un canale "crea canale" riceve un canale vocale suo (eliminato quando si svuota), gestito da un pannello unico con pulsanti (rinomina, limite, blocca, nascondi, invita, espelli, trasferisci, rivendica, elimina). | Pannello web **Canali temporanei** (sezione Tools): canali hub, categoria, canale del pannello, nome, limite iniziale. Il bot richiede *Gestisci canali*, *Gestisci permessi*, *Sposta membri*. |
 
 ## Aggiungere un plugin
 

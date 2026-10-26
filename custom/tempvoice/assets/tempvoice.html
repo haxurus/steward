@@ -1,0 +1,73 @@
+{{define "cp_custom_tempvoice"}}
+{{template "cp_head" .}}
+
+<header class="page-header">
+    <h2>Canali vocali temporanei</h2>
+</header>
+
+{{template "cp_alerts" .}}
+
+<form method="post" action="/manage/{{.ActiveGuild.ID}}/tempvoice" data-async-form>
+    <div class="row">
+        <div class="col-lg-12">
+            <div class="card {{if .TempVoice.Enabled}}card-featured card-featured-success{{end}}">
+                <header class="card-header">
+                    {{checkbox "Enabled" "tempvoice-enabled" `<h2 class="card-title">Canali temporanei attivi</h2>` .TempVoice.Enabled}}
+                </header>
+                <div class="card-body">
+                    <p>Chi entra in uno dei canali "crea canale" riceve un canale vocale tutto suo, che viene eliminato quando si svuota.
+                        Il proprietario lo gestisce con i pulsanti del pannello di controllo: rinomina, limite utenti, blocca, nascondi,
+                        invita, espelli, trasferisci, rivendica ed elimina.</p>
+                    <p class="text-muted">Il bot ha bisogno dei permessi <b>Gestisci canali</b>, <b>Gestisci permessi</b>,
+                        <b>Sposta membri</b>, <b>Visualizza canali</b> e <b>Connetti</b> nella categoria dei canali temporanei.</p>
+
+                    <div class="form-group">
+                        <label for="tempvoice-hubs">Canali "crea canale" (vocali)</label>
+                        <select id="tempvoice-hubs" name="HubChannels" class="multiselect form-control" multiple="multiple" data-plugin-multiselect>
+                            {{voiceChannelOptionsMulti .ActiveGuild.Channels .TempVoice.HubChannels}}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="tempvoice-category">Categoria dei nuovi canali</label>
+                        <select id="tempvoice-category" name="Category" class="form-control">
+                            {{catChannelOptions .ActiveGuild.Channels .TempVoice.Category true "Stessa categoria del canale \"crea canale\""}}
+                        </select>
+                        <small class="form-text text-muted">I nuovi canali ereditano i permessi della categoria.</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="tempvoice-control">Canale del pannello di controllo (testuale)</label>
+                        <select id="tempvoice-control" name="ControlChannel" class="form-control">
+                            {{textOnlyChannelOptions .ActiveGuild.Channels .TempVoice.ControlChannel true "Nessuno"}}
+                        </select>
+                        <small class="form-text text-muted">Il bot pubblica qui il pannello con i pulsanti, unico per tutti i canali temporanei,
+                            e lo aggiorna a ogni salvataggio.</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="tempvoice-name">Nome dei nuovi canali</label>
+                        <input type="text" class="form-control" id="tempvoice-name" name="NameTemplate" maxlength="100"
+                            value="{{.TempVoice.NameTemplate}}" placeholder="Canale di {user}">
+                        <small class="form-text text-muted"><code>{user}</code> diventa il nome del proprietario nel server.</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="tempvoice-limit">Limite utenti iniziale</label>
+                        <input type="number" min="0" max="99" class="form-control" id="tempvoice-limit" name="DefaultUserLimit"
+                            value="{{.TempVoice.DefaultUserLimit}}">
+                        <small class="form-text text-muted">0 = nessun limite. Il proprietario può cambiarlo dal pannello.</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-lg-12">
+            <button type="submit" class="btn btn-success btn-lg btn-block">Salva</button>
+        </div>
+    </div>
+</form>
+
+{{template "cp_footer" .}}
+{{end}}
